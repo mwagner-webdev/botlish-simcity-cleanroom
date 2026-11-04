@@ -123,16 +123,16 @@ nomethod fn div_bits(a: int, b: int, rem: int, q: int, bit: int) -> int:
     if bit < 0:
         q
     else:
-        here = shift_left(rem, 1) + bit_and(shift_right(a, bit), 1)
+        here = rem.shift_left(1) + bit_and(a.shift_right(bit), 1)
         fits = here >= b
         rest = if fits:
             here - b
         else:
             here
         next_q = if fits:
-            shift_left(q, 1) + 1
+            q.shift_left(1) + 1
         else:
-            shift_left(q, 1)
+            q.shift_left(1)
         div_bits(a, b, rest, next_q, bit - 1)
 
 nomethod fn div(a: int, b: int) -> int:

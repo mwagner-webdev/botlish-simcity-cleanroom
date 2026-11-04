@@ -169,16 +169,16 @@ nomethod fn div_bits(a: int, b: int, rem: int, q: int, bit: int) -> int:
     if bit < 0:
         q
     else:
-        here = shift_left(rem, 1) + bit_and(shift_right(a, bit), 1)
+        here = rem.shift_left(1) + bit_and(a.shift_right(bit), 1)
         fits = here >= b
         rest = if fits:
             here - b
         else:
             here
         next_q = if fits:
-            shift_left(q, 1) + 1
+            q.shift_left(1) + 1
         else:
-            shift_left(q, 1)
+            q.shift_left(1)
         div_bits(a, b, rest, next_q, bit - 1)
 
 nomethod fn div(a: int, b: int) -> int:
@@ -324,10 +324,8 @@ nomethod fn upkeep_of(kind: int) -> int:
         COAL_UPKEEP
     elif kind == simcity::city::NUCLEAR:
         NUCLEAR_UPKEEP
-    elif kind == simcity::city::POLICE:
+    elif kind == simcity::city::POLICE or kind == simcity::city::FIRE:
         POLICE_UPKEEP
-    elif kind == simcity::city::FIRE:
-        FIRE_UPKEEP
     else:
         0
 
@@ -593,7 +591,7 @@ nomethod fn adds_pollution(x: int, y: int, n: int, place city: simcity::city::Ci
     i = simcity::city::index_of(city, x, y)
     if i < 0 or i >= city.grid.pollution.capacity():
         return unit
-    now = std::mutable_array::at(city.grid.pollution, i)
+    now = city.grid.pollution.at(i)
     city.grid.pollution.set(i, clamp(now + n, 0, 255))
 
 nomethod fn makes_smoke(i: int, place city: simcity::city::City) -> unit:
@@ -614,7 +612,7 @@ nomethod fn filters_air(i: int, place city: simcity::city::City) -> unit:
     x = i.mod(city.width)
     y = divide(i, city.width)
     near = neighbours_trees(city, x, y)
-    here = std::mutable_array::at(city.grid.pollution, i)
+    here = city.grid.pollution.at(i)
     city.grid.pollution.set(i, clamp(here - near, 0, 255))
     filters_air(i + 1, city)
 
@@ -623,11 +621,11 @@ nomethod fn drifts(i: int, place city: simcity::city::City) -> unit:
         return unit
     x = i.mod(city.width)
     y = divide(i, city.width)
-    here = std::mutable_array::at(city.grid.pollution, i)
+    here = city.grid.pollution.at(i)
     around = simcity::city::pollution_at(city, x - 1, y) + simcity::city::pollution_at(city, x + 1, y) + simcity::city::pollution_at(city, x, y - 1) + simcity::city::pollution_at(city, x, y + 1)
     kept = here * (POLLUTION_SCALE - POLLUTION_DECAY)
     moved = kept + shift_right((around * POLLUTION_SCALE - kept), POLLUTION_SPREAD)
-    city.grid.pollution.set(i, clamp(shift_right(moved, 13), 0, 255))
+    city.grid.pollution.set(i, clamp(moved.shift_right(13), 0, 255))
     drifts(i + 1, city)
 
 nomethod fn spoils(place city: simcity::city::City) -> unit:
@@ -650,7 +648,7 @@ nomethod fn subs_pollution(x: int, y: int, row: int, col: int, field: MutableArr
     else:
         i = simcity::city::index_of(city, x + col, y + row)
         if i >= 0 and i < field.capacity():
-            now = std::mutable_array::at(field, i)
+            now = field.at(i)
             field.set(i, clamp(now - amount, 0, 255))
         else:
             unit
@@ -732,12 +730,12 @@ nomethod fn values(i: int, place city: simcity::city::City) -> unit:
         shift_right((simcity::city::pop_at(city, x, y) + simcity::city::jobs_at(city, x, y)) * TRAFFIC_VALUE, 12)
     else:
         0
-    middle = distance(x - shift_right(city.width, 1), y - shift_right(city.height, 1))
+    middle = distance(x - city.width.shift_right(1), y - city.height.shift_right(1))
     centre = if middle < CENTRE_RADIUS:
         CENTRE_ADD * (CENTRE_RADIUS - middle)
     else:
         0
-    worth = 32 + pretty + shift_right(water * WATER_ADD, 3) + shift_right(parks * PARK_ADD, 2) + shift_right(centre, 3) + shift_right(simcity::city::value_at(city, x, y) + 32, 1) - smoke - crime - busy
+    worth = 32 + pretty + water * WATER_ADD.shift_right(3) + parks * PARK_ADD.shift_right(2) + centre.shift_right(3) + shift_right(simcity::city::value_at(city, x, y) + 32, 1) - smoke - crime - busy
     city.grid.value.set(i, clamp(worth, 0, 255))
     values(i + 1, city)
 
@@ -848,7 +846,7 @@ nomethod fn grows(kind: int, x: int, y: int, market: Totals, place city: simcity
     here = simcity::city::index_of(city, x, y)
     if here < 0 or here >= city.grid.level.capacity():
         return unit
-    level = std::mutable_array::at(city.grid.level, here)
+    level = city.grid.level.at(here)
     base = if kind == simcity::city::RES:
         market.demand_r
     elif kind == simcity::city::COM:

@@ -78,8 +78,9 @@ and nothing is served; tax to the maximum and what you built walks away.
     ./botlish-linux-x86_64 -backend cranelift gametest.bot  # the window, no display
     ./botlish-linux-x86_64 -backend cranelift bench.bot     # the performance report
 
-`tests.bot` prints PASS or FAIL per case and a count. `gametest.bot` prints four
-figures that describe what a click did. `bench.bot` prints the map's size, how
+`tests.bot` prints PASS or FAIL per case and a count. `gametest.bot` drives the
+same window headlessly and prints the map's size, whether all four corners of
+the map are reachable, what a click spent, and what the inspector says. `bench.bot` prints the map's size, how
 much of it is developed, and how long a thousand months took.
 
 ## What is implemented, what is not

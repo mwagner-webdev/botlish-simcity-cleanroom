@@ -161,7 +161,45 @@ and `-help std::mutable_array::copy` answered the two questions I asked most.
   answers "no Compilerpedia topic matches". For a program of eleven modules that
   leaves cross-references as plain comments.
 
-## 7. The one thing I would change first
+## 7. The bug that reads like a language bug and is not
+
+The worst defect of the whole session was one line:
+
+```
+raven::window::Rwindow_get_mouse_position(window.id, cell.xy, cell.xy)
+```
+
+`Rwindow_get_mouse_position` takes two out-parameters. A C pointer in Botlish
+is affine and has no arithmetic, so the pair cannot be one stepped pointer --
+but passing one address for both is a perfectly legal call, and Raven then
+wrote the mouse's y over its x and left the second slot untouched. The game
+read `(y, 0)` and the cursor could only ever travel along the map's diagonal:
+every position off that line was unreachable. Nothing in the compiler objected,
+because the call was well typed.
+
+The fix was two separate one-float cells, and the shape of the fix is worth
+recording: the module now allocates two pointers and the context's `Cell` holds
+both, because the discharge is a memory fact and not a type fact. A `Ptr[Float]`
+and a `Ptr[Void]` re-typed are indistinguishable to the type system.
+
+The second bug was mine and not the language's: `Tool::Inspect` was passed to
+`simcity::actions::place`, which only knows line tools, zone tools and the
+bulldozer. The inspect tool fell through to the zone branch and was refused.
+A sum type over the tools would have made that a compile error; an enum with a
+`None` case that `kind_of` answers `0` for cannot. That is a real cost of
+enums-as-ints here, and the honest fix was to branch on the tool in the input
+layer rather than to overload the model with a tool it does not place.
+
+## 8. What the compiler made me do that was right
+
+* Make every accessor total, by guarding an index against its array's
+  capacity. That is what let the tests become plain expressions.
+* Rewrite the sweep direction, because propagation over a tile list advances
+  one tile per pass. Measured: 47 s to 19 s over 1000 months.
+* Replace positional lists of six figures with a struct, because
+  `FIXED-ARITY-LIST-RETURN` said a reader should not count positions.
+
+## 9. The one thing I would change first
 
 Update-one-field. A record-update expression (`game{message: text}`) would remove
 the most verbose code in the program, remove the temptation to hold it in a
@@ -169,14 +207,18 @@ mutable one-slot array, and make the frame loop shorter.
 
 The second is integer division.
 
-## 8. Things I am not calling defects
+The third is a way to say, in a type, that two C pointers are not one: a
+`Ptr[Float]` pair stepped through one allocation is a memory fact the type
+system cannot see, and the bug in section 7 was exactly a well-typed call.
+
+## 10. Things I am not calling defects
 
 * Rejection of my first, invalid programs: those were my errors.
 * `NATIVE-ONLY` for `interp` on a C call: documented, and correct.
 * The verbosity of error clauses: the design is deliberate and the compile-time
   checking is real.
 
-## 9. Numbers from this session
+## 11. Numbers from this session
 
 | measurement | value |
 |---|---|

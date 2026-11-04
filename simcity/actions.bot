@@ -18,8 +18,6 @@ import type simcity::city::Tool
 
 import simcity::city
 
-
-
 # What a placement achieved.
 
 # What a placement achieved.
@@ -97,7 +95,6 @@ nomethod fn set_access(city: simcity::city::City, x: int, y: int, v: int, place 
 # --- Validation ------------------------------------------------------------
 
 # --- Validation ------------------------------------------------------------
-# --- Validation ------------------------------------------------------------
 # WHETHER the tile is buildable ground: land that holds nothing yet.
 nomethod fn clear?(city: simcity::city::City, x: int, y: int) -> bool:
     if simcity::city::terrain(city, x, y) == simcity::city::WATER:
@@ -135,29 +132,30 @@ nomethod fn rows_clear?(city: simcity::city::City, x: int, y: int, row: int, col
 nomethod fn block_clear?(city: simcity::city::City, x: int, y: int) -> bool:
     rows_clear?(city, x, y, -1, -1)
 
-# What a placement of TOOL at (X, Y) would achieve, without charging for it.
-nomethod fn fits(city: simcity::city::City, tool: Tool, x: int, y: int) -> Placed:
+# WHETHER the ground the tool needs is there: the tile for a line, the whole
+# 3 x 3 block for a zone, whatever the bulldozer can take away.
+nomethod fn room?(city: simcity::city::City, tool: Tool, x: int, y: int) -> bool:
     if not simcity::city::inside?(city, x, y):
+        false
+    elif simcity::city::line_tool?(tool):
+        clear?(city, x, y)
+    elif tool == Tool::Bulldoze:
+        clearable?(city, x, y)
+    else:
+        simcity::city::block_inside?(city, x, y) and block_clear?(city, x, y)
+
+# What a placement of TOOL at (X, Y) would achieve, without charging for it:
+# one exit per answer, so the reader follows four decisions and no more.
+nomethod fn fits(city: simcity::city::City, tool: Tool, x: int, y: int) -> Placed:
+    off_map = not simcity::city::inside?(city, x, y) or (simcity::city::zone_tool?(tool) and not simcity::city::block_inside?(city, x, y))
+    if off_map:
         Placed::Outside
     elif simcity::city::funds(city) < simcity::city::cost_of(tool):
         Placed::Poor
-    elif simcity::city::line_tool?(tool):
-        if clear?(city, x, y):
-            Placed::Built
-        else:
-            Placed::Blocked
-    elif tool == Tool::Bulldoze:
-        if clearable?(city, x, y):
-            Placed::Built
-        else:
-            Placed::Blocked
+    elif not room?(city, tool, x, y):
+        Placed::Blocked
     else:
-        if not simcity::city::block_inside?(city, x, y):
-            Placed::Outside
-        elif block_clear?(city, x, y):
-            Placed::Built
-        else:
-            Placed::Blocked
+        Placed::Built
 
 nomethod fn apply_line(city: simcity::city::City, tool: Tool, x: int, y: int, place grid: simcity::city::Grid) -> unit:
     if tool == Tool::Road:

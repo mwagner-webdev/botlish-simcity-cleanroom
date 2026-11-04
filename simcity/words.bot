@@ -20,8 +20,11 @@ import simcity::sim
 
 import type simcity::city::Tool
 
+nomethod fn char(c: UnicodeChar) -> str:
+    "".append_char(c)
+
 nomethod fn dollars(n: int) -> str:
-    "$".concat(std::int::to_string(n))
+    char('$').concat(std::int::to_string(n))
 
 nomethod fn month_name(month: int) -> str:
     if month == 0:
@@ -62,7 +65,7 @@ nomethod fn show_jobs(city: simcity::city::City) -> str:
     "Jobs ".concat(std::int::to_string(simcity::city::jobs_open(city)))
 
 nomethod fn show_tax(city: simcity::city::City) -> str:
-    "Tax ".concat(std::int::to_string(simcity::city::tax_rate(city))).concat("%")
+    "Tax ".concat(std::int::to_string(simcity::city::tax_rate(city))).append_char('%')
 
 nomethod fn show_income(city: simcity::city::City) -> str:
     "Taxes ".concat(dollars(simcity::city::income_year(city))).concat(" a year")
@@ -85,9 +88,9 @@ nomethod fn each(seen: int, made: int, text: str) -> str:
     if made >= 20:
         text
     elif seen > 0:
-        each(seen - 1, made + 1, text.concat("#"))
+        each(seen - 1, made + 1, text.append_char('#'))
     else:
-        each(seen - 1, made + 1, text.concat("."))
+        each(seen - 1, made + 1, text.append_char('.'))
 
 # The tool's name, for the label that says what the player has chosen.
 nomethod fn show_tool(tool: Tool) -> str:
@@ -150,45 +153,65 @@ nomethod fn show_refusal(outcome: simcity::actions::Placed) -> str:
         "Built."
 
 nomethod fn show_cost(tool: Tool) -> str:
-    "$".concat(std::int::to_string(simcity::city::cost_of(tool)))
+    char('$').concat(std::int::to_string(simcity::city::cost_of(tool)))
 
-# A bar of `filled` marks out of twenty, for a figure that reads at a glance.
-nomethod fn bar(filled: int) -> str:
-    each(filled, 0, "")
-
-# What the tile under the cursor holds, for the inspector line.
+# What the tile under the cursor holds, for the inspector line: what stands on
+# it, and the four conditions that decide what becomes of it.
 nomethod fn show_tile(city: simcity::city::City, x: int, y: int) -> str:
-    land = simcity::city::terrain(city, x, y)
+    ground = simcity::city::terrain(city, x, y)
     kind = simcity::city::zone_at(city, x, y)
-    where = "at ".concat(std::int::to_string(x)).concat(", ").concat(std::int::to_string(y))
-    if simcity::city::road_at(city, x, y) != 0:
-        "Road, ".concat(where)
+    where = "at ".append_char(' ').concat(std::int::to_string(x)).append_char(',').append_char(' ').concat(std::int::to_string(y))
+    what = if simcity::city::road_at(city, x, y) != 0:
+        "Road"
+    elif simcity::city::rail_at(city, x, y) != 0:
+        "Rail"
     elif simcity::city::wire_at(city, x, y) != 0:
         if simcity::city::powered_at(city, x, y) != 0:
-            "Live power line, ".concat(where)
+            "Live power line"
         else:
-            "Dead power line, ".concat(where)
-    elif simcity::city::rail_at(city, x, y) != 0:
-        "Rail, ".concat(where)
-    elif kind == simcity::city::NONE:
-        "Land, ".concat(where)
+            "Dead power line"
+    elif kind != simcity::city::NONE:
+        zone_name(kind)
+    elif ground == simcity::city::WATER:
+        "Water"
+    elif ground == simcity::city::TREES:
+        "Trees"
+    elif ground == simcity::city::ROUGH:
+        "Rough ground"
     else:
-        zone_name(kind).concat(", level ").concat(std::int::to_string(simcity::city::level_at(city, x, y))).concat(", ").concat(where)
+        "Bare land"
+    level = simcity::city::level_at(city, x, y)
+    grown = if kind != simcity::city::NONE and level > 0:
+        ", level ".concat(std::int::to_string(level))
+    else:
+        ""
+    powered = if simcity::city::powered_at(city, x, y) != 0:
+        "on"
+    else:
+        "off"
+    served = if simcity::city::access_at(city, x, y) != 0:
+        "on"
+    else:
+        "off"
+    smoke = simcity::city::pollution_at(city, x, y)
+    crime = simcity::city::crime_at(city, x, y)
+    worth = simcity::city::value_at(city, x, y)
+    what.concat(grown).append_char(' ').concat(where).concat(", power ").concat(powered).concat(", road ").concat(served).concat(", smoke ").concat(std::int::to_string(smoke)).concat(", crime ").concat(std::int::to_string(crime)).concat(", worth ").concat(std::int::to_string(worth))
 
 # The RCI bar's figure for one zoning category, as a bar of hash marks.
 nomethod fn show_demand(city: simcity::city::City, slot: int) -> str:
     name = if slot == 0:
-        "R"
+        char('R')
     elif slot == 1:
-        "C"
+        char('C')
     else:
-        "I"
+        char('I')
     want = simcity::city::want(city, slot)
     filled = if want >= 0:
         want
     else:
         -want
-    name.concat(" ").concat(bar(filled))
+    name.append_char(' ').concat(each(filled, 0, ""))
 
 nomethod fn show_date(city: simcity::city::City) -> str:
-    month_name(simcity::city::month(city)).concat(" ").concat(std::int::to_string(year_of(simcity::city::ticks(city))))
+    month_name(simcity::city::month(city)).append_char(' ').concat(std::int::to_string(year_of(simcity::city::ticks(city))))

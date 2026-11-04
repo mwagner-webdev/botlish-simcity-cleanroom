@@ -81,8 +81,8 @@ renderer draws nothing and no frame is uploaded:
     residents 1260
     funds 88,725
     months advanced 1400
-    1000 months took 19,154 ms
-    one month takes 19,154 microseconds      19.2 ms a month
+    1000 months took 18,470 ms
+    one month takes 18,470 microseconds      18.5 ms a month
 
 The town holds 27 developed tiles out of 2304 -- a deliberately small
 developed city, because the requirement is a *representative* developed city and
@@ -113,8 +113,8 @@ real but worth a fifth of that.
 
 ### What this means for play
 
-19 ms a month is 2% of the CPU at the game's normal speed (a month every half a
-second) and 19% at rush (a month every tenth of a second). Rendering is extra
+18 ms a month is 2% of the CPU at the game's normal speed (a month every half a
+second) and 18% at rush (a month every tenth of a second). Rendering is extra
 and separate: a whole viewport of 26 by 19 tiles is 331,776 bytes of texture,
 redrawn only when the city or the pointer's tile changes.
 
@@ -127,11 +127,31 @@ redrawn only when the city or the pointer's tile changes.
 | the window compiles | yes |
 | a real X11 window opens and the frame loop runs | yes, run: the process stays alive with the window open until the timeout kills it |
 | the window, driven with synthetic input, builds on a click | yes, run: `gametest.bot` |
+| the pointer aims at every tile of the map | yes, run: the map's four corners are read back on it |
 | the window, driven by a human hand | not run |
 | the game's advance while the player is idle | yes: a timer ticks every tenth of
   a second, and 40 headless frames of the loop's own `month` advance 8 simulated
   months, which is the tempo set |
 | the game's own frame loop, complete | not exercised to the end |
+
+## Two defects found by driving the window, and fixed
+
+* **The cursor could only reach the map's diagonal.** `simcity::screen`'s
+  `mouse_at` passed the same C pointer as both out-parameters of
+  `Rwindow_get_mouse_position`, so Raven wrote the mouse's y over its x and
+  the second slot stayed zero: the game read (y, 0) and the pointer's tile
+  only ever ran along one line. The cell now holds two pointers, one per
+  float, and the pointer can be aimed at every tile. `gametest.bot` reads all
+  four corners of the map and answers 1111 (every one of them is on the map's
+  viewport) -- and the map is now 416 by 304, so its tiles are squares rather
+  than the 416 by 486 rectangles it drew before.
+* **The inspect tool never said anything.** `Tool::Inspect` was handed to
+  `simcity::actions::place`, where it is not a line tool or a zone tool, so it
+  fell through to the zone branch and was refused as "the ground is not
+  clear". `read_mouse` now asks for the tile's description instead
+  (`simcity::words::show_tile`), which says what stands on the tile, its zone
+  level, and the four conditions that decide its future: power, road access,
+  smoke, crime and worth.
 
 ## What is not done
 

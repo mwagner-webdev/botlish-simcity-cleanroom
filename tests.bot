@@ -1,12 +1,11 @@
 # tests.bot -- the headless suite: the simulation, tested without a window.
 #
-# Run it with
-#     ./botlish-linux-x86_64 -backend cranelift tests.bot
+#   ./botlish-linux-x86_64 -backend cranelift tests.bot
 #
 # Every case compares a model output, never a process exit: the value of a
-# successful run is the suite's report.
-import std::int
-import std::list
+# successful run is the suite's report. What a case returns is a `Report`, one
+# named figure per field, because a list of six figures is six positions a
+# reader has to count and a struct says which is which.
 import std::str
 import std::test
 import simcity::actions
@@ -15,6 +14,148 @@ import simcity::scenario
 import simcity::sim
 
 with context std::test::suite()
+
+# What a case measured: the zero of a field is "this case did not measure it".
+struct Report:
+    money: int
+    road: int
+    zone: int
+    level: int
+    people: int
+    jobs: int
+    powered: int
+    served: int
+    smoke: int
+    worth: int
+    near: int
+    far: int
+    income: int
+    upkeep: int
+    balance: int
+    months: int
+    capacity: int
+    wide: int
+    tall: int
+    off_map: int
+    refuses: int
+    wants_r: int
+    wants_c: int
+    differ: int
+
+nomethod fn empty() -> Report:
+    Report {
+        money: 0, road: 0, zone: 0, level: 0, people: 0, jobs: 0,
+        powered: 0, served: 0, smoke: 0, worth: 0, near: 0, far: 0,
+        income: 0, upkeep: 0, balance: 0, months: 0, capacity: 0,
+        wide: 0, tall: 0, off_map: 0, refuses: 0, wants_r: 0,
+        wants_c: 0, differ: 0
+    }
+
+# A report with the money field set: the common case, since most cases check
+# what the treasury did.
+nomethod fn spent(money: int) -> Report:
+    blank = empty()
+    Report {
+        money: money, road: blank.road, zone: blank.zone, level: blank.level,
+        people: blank.people, jobs: blank.jobs, powered: blank.powered,
+        served: blank.served, smoke: blank.smoke, worth: blank.worth,
+        near: blank.near, far: blank.far, income: blank.income,
+        upkeep: blank.upkeep, balance: blank.balance, months: blank.months,
+        capacity: blank.capacity, wide: blank.wide, tall: blank.tall,
+        off_map: blank.off_map, refuses: blank.refuses, wants_r: blank.wants_r,
+        wants_c: blank.wants_c, differ: blank.differ
+    }
+
+# The expected report of a zone case: the tiles of the block and the level.
+nomethod fn zones(tiles: int, level: int) -> Report:
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: tiles, level: level, people: 0, jobs: 0,
+        powered: 0, served: 0, smoke: 0, worth: 0, near: 0, far: 0, income: 0,
+        upkeep: 0, balance: 0, months: 0, capacity: 0, wide: 0, tall: 0,
+        off_map: 0, refuses: 0, wants_r: 0, wants_c: 0, differ: 0
+    }
+
+# The expected report of a case about the ground and the money.
+nomethod fn ground(money: int, road: int, zone: int, smoke: int) -> Report:
+    blank = empty()
+    Report {
+        money: money, road: road, zone: zone, level: 0, people: 0, jobs: 0,
+        powered: 0, served: 0, smoke: smoke, worth: 0, near: 0, far: 0,
+        income: 0, upkeep: 0, balance: 0, months: 0, capacity: 0, wide: 0,
+        tall: 0, off_map: 0, refuses: 0, wants_r: 0, wants_c: 0, differ: 0
+    }
+
+# The expected report of a cleared tile: what was taken away, and the money.
+nomethod fn cleared(money: int, road: int, zone: int) -> Report:
+    blank = empty()
+    Report {
+        money: money, road: road, zone: zone, level: 0, people: 0, jobs: 0,
+        powered: 0, served: 0, smoke: 0, worth: 0, near: 0, far: 0, income: 0,
+        upkeep: 0, balance: 0, months: 0, capacity: 0, wide: 0, tall: 0,
+        off_map: 0, refuses: 0, wants_r: 0, wants_c: 0, differ: 0
+    }
+
+# The expected report of clearing land: on the road, after it, on bare
+# ground, and the road tile left.
+nomethod fn cleared_land(on_road: int, after: int, bare: int, left: int) -> Report:
+    blank = empty()
+    Report {
+        money: on_road, road: after, zone: bare, level: 0, people: 0, jobs: 0,
+        powered: 0, served: 0, smoke: 0, worth: 0, near: 0, far: 0, income: 0,
+        upkeep: 0, balance: 0, months: 0, capacity: 0, wide: 0, tall: 0,
+        off_map: 0, refuses: left, wants_r: 0, wants_c: 0, differ: 0
+    }
+
+# The expected report of what a placement refused: two codes.
+nomethod fn refused(a: int, b: int) -> Report:
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: 0, people: 0, jobs: 0, powered: 0,
+        served: 0, smoke: 0, worth: 0, near: 0, far: 0, income: 0, upkeep: 0,
+        balance: 0, months: 0, capacity: 0, wide: 0, tall: 0, off_map: a,
+        refuses: b, wants_r: 0, wants_c: 0, differ: 0
+    }
+
+# The expected report of a map's extent and its out-of-map indices.
+nomethod fn map_of(wide: int, tall: int, a: int, b: int, c: int) -> Report:
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: 0, people: 0, jobs: 0, powered: 0,
+        served: 0, smoke: 0, worth: 0, near: 0, far: 0, income: 0, upkeep: 0,
+        balance: 0, months: 0, capacity: 0, wide: wide, tall: tall,
+        off_map: a, refuses: b, wants_r: 0, wants_c: 0, differ: c
+    }
+
+# The expected report of a case about power or road access: two booleans.
+nomethod fn supplied(a: int, b: int) -> Report:
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: 0, people: 0, jobs: 0,
+        powered: a, served: b, smoke: 0, worth: 0, near: 0, far: 0, income: 0,
+        upkeep: 0, balance: 0, months: 0, capacity: 0, wide: 0, tall: 0,
+        off_map: 0, refuses: 0, wants_r: 0, wants_c: 0, differ: 0
+    }
+
+# The expected report of a case with a zone level and a served flag.
+nomethod fn served_level(level: int, served: int) -> Report:
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: level, people: 0, jobs: 0,
+        powered: served, served: 0, smoke: 0, worth: 0, near: 0, far: 0,
+        income: 0, upkeep: 0, balance: 0, months: 0, capacity: 0, wide: 0,
+        tall: 0, off_map: 0, refuses: 0, wants_r: 0, wants_c: 0, differ: 0
+    }
+
+# The expected report of a case about the months and the year's figures.
+nomethod fn months_of(a: int, b: int, c: int, d: int) -> Report:
+    blank = empty()
+    Report {
+        money: a, road: b, zone: 0, level: 0, people: 0, jobs: 0, powered: 0,
+        served: c, smoke: 0, worth: 0, near: 0, far: d, income: 0, upkeep: 0,
+        balance: 0, months: 0, capacity: 0, wide: 0, tall: 0, off_map: 0,
+        refuses: 0, wants_r: 0, wants_c: 0, differ: 0
+    }
 
 # --- Helpers ---------------------------------------------------------------
 
@@ -30,75 +171,91 @@ nomethod fn roads(city: simcity::city::City, x0: int, y: int, x1: int) -> simcit
 nomethod fn town(seed: int) -> simcity::city::City:
     simcity::scenario::town(seed)
 
-nomethod fn text_of(m: simcity::scenario::Metrics) -> str:
-    "pop ".concat(std::int::to_string(m.population)).concat(" funds ").concat(std::int::to_string(m.funds)).concat(" res ").concat(std::int::to_string(m.residential))
+nomethod fn money(city: simcity::city::City) -> int:
+    simcity::city::funds(city)
 
-# --- Construction ----------------------------------------------------------
-
-fn road_costs_what_the_palette_says():
-    fresh = simcity::city::make(16, 16, 1, 20000)
-    built = puts(fresh, simcity::city::Tool::Road, 4, 4)
-    [simcity::city::funds(built), simcity::city::road_at(built, 4, 4)]
-
-nomethod fn fitted(o: simcity::actions::Placed) -> int:
-    if o == simcity::actions::Placed::Built:
+# What a placement answered, as a number a test can name.
+nomethod fn code(outcome: simcity::actions::Placed) -> int:
+    if outcome == simcity::actions::Placed::Built:
         1
-    elif o == simcity::actions::Placed::Poor:
+    elif outcome == simcity::actions::Placed::Poor:
         2
-    elif o == simcity::actions::Placed::Blocked:
+    elif outcome == simcity::actions::Placed::Blocked:
         3
     else:
         4
 
-nomethod fn fewer_residents(numbers: List[int]) -> bool:
-    std::list::get(numbers, 0, 0) == 0 and std::list::get(numbers, 1, 0) == 0 and std::list::get(numbers, 2, 0) < std::list::get(numbers, 3, 0)
+# --- Construction ----------------------------------------------------------
 
-nomethod fn a_city_anyway(numbers: List[int]) -> bool:
-    std::list::get(numbers, 0, 0) > 300 and std::list::get(numbers, 2, 0) == 1
+fn a_road_costs_what_the_palette_says() -> Report:
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    built = puts(fresh, simcity::city::Tool::Road, 4, 4)
+    blank = empty()
+    Report {
+        money: money(built), road: simcity::city::road_at(built, 4, 4),
+        zone: 0, level: 0, people: 0, jobs: 0, powered: 0, served: 0,
+        smoke: 0, worth: 0, near: 0, far: 0, income: 0, upkeep: 0, balance: 0,
+        months: 0, capacity: 0, wide: 0, tall: 0, off_map: 0, refuses: 0,
+        wants_r: 0, wants_c: 0, differ: 0
+    }
 
-fn a_zone_is_its_whole_block():
+fn a_zone_is_its_whole_block() -> Report:
     fresh = simcity::city::make(16, 16, 1, 20000)
     built = puts(fresh, simcity::city::Tool::Residential, 5, 5)
-    corners = fold row from -1 through 1 with intermediate t 0:
+    tiles = fold row from -1 through 1 with intermediate t 0:
         fold col from -1 through 1 with intermediate u t:
             u + simcity::city::zone_at(built, 5 + col, 5 + row)
-    [corners, simcity::city::zone_at(built, 5, 5), simcity::city::block_level(built, 5, 5)]
+    zones(tiles, simcity::city::zone_at(built, 5, 5))
 
-fn a_second_zone_cannot_overlap_the_first():
+fn a_second_zone_cannot_overlap_the_first() -> Report:
     fresh = simcity::city::make(16, 16, 1, 20000)
     built = puts(fresh, simcity::city::Tool::Residential, 5, 5)
     second = puts(built, simcity::city::Tool::Commercial, 5, 7)
-    [simcity::city::funds(second), simcity::city::zone_at(second, 5, 7)]
+    ground(money(second), simcity::city::zone_at(second, 5, 7), 0, 0)
 
-fn a_road_cannot_be_built_on_water():
+fn a_road_cannot_be_built_on_water() -> Report:
     fresh = simcity::city::make(32, 32, 7, 20000)
     wet = simcity::city::terrain(fresh, 0, 29)
-    [wet, simcity::city::funds(puts(fresh, simcity::city::Tool::Road, 0, 29))]
+    built = puts(fresh, simcity::city::Tool::Road, 0, 29)
+    ground(money(built), 0, 0, wet)
 
-fn nothing_is_built_on_water():
+fn nothing_is_built_on_water() -> Report:
     fresh = simcity::city::make(32, 32, 7, 20000)
     wet = simcity::city::terrain(fresh, 0, 29)
     built = puts(fresh, simcity::city::Tool::Residential, 0, 29)
-    [wet, simcity::city::zone_at(built, 0, 29), simcity::city::funds(built)]
+    ground(money(built), 0, simcity::city::zone_at(built, 0, 29), wet)
 
-fn the_treasury_stops_a_build_it_cannot_pay_for():
+fn the_treasury_stops_a_build_it_cannot_pay_for() -> Report:
     fresh = simcity::city::make(16, 16, 1, 100)
     tried = puts(fresh, simcity::city::Tool::Nuclear, 8, 8)
-    [simcity::city::funds(tried), simcity::city::zone_at(tried, 8, 8)]
+    ground(money(tried), 0, simcity::city::zone_at(tried, 8, 8), 0)
 
-fn bulldozing_takes_a_zone_away():
+fn bulldozing_takes_a_zone_away() -> Report:
     fresh = simcity::city::make(16, 16, 1, 20000)
     zoned = puts(fresh, simcity::city::Tool::Residential, 5, 5)
     dug = puts(zoned, simcity::city::Tool::Bulldoze, 6, 6)
-    [simcity::city::zone_at(dug, 5, 5), simcity::city::zone_at(dug, 6, 6), simcity::city::funds(dug)]
+    cleared(money(dug), simcity::city::zone_at(dug, 5, 5), 0)
 
-fn bulldozing_takes_a_line_away():
+fn bulldozing_takes_a_line_away() -> Report:
     fresh = simcity::city::make(16, 16, 1, 20000)
     wired = puts(fresh, simcity::city::Tool::Wire, 4, 4)
     cut = puts(wired, simcity::city::Tool::Bulldoze, 4, 4)
-    [simcity::city::wire_at(cut, 4, 4), simcity::city::funds(cut)]
+    cleared(money(cut), simcity::city::wire_at(cut, 4, 4), 0)
 
-fn bulldozing_a_grown_block_takes_its_people_too():
+fn clearing_land_costs_money() -> Report:
+    fresh = simcity::city::make(32, 32, 7, 20000)
+    road = puts(fresh, simcity::city::Tool::Road, 12, 12)
+    bare = puts(fresh, simcity::city::Tool::Bulldoze, 3, 3)
+    cleared(money(road), money(puts(road, simcity::city::Tool::Bulldoze, 12, 12)), money(bare))
+
+fn cleared_land_case() -> Report:
+    fresh = simcity::city::make(32, 32, 7, 20000)
+    road = puts(fresh, simcity::city::Tool::Road, 12, 12)
+    bare = puts(fresh, simcity::city::Tool::Bulldoze, 3, 3)
+    after = puts(road, simcity::city::Tool::Bulldoze, 12, 12)
+    cleared_land(money(road), money(after), money(bare), simcity::city::road_at(after, 12, 12))
+
+fn bulldozing_a_grown_block_takes_its_people_too() -> Report:
     fresh = simcity::city::make(32, 32, 7, 20000)
     t1 = simcity::scenario::road_up(fresh, 10, 0, 23)
     t2 = simcity::scenario::wire_up(t1, 14, 0, 23)
@@ -108,247 +265,351 @@ fn bulldozing_a_grown_block_takes_its_people_too():
     t6 = puts(t5, simcity::city::Tool::Residential, 12, 18)
     grown = simcity::scenario::months(t6, 150)
     dug = puts(grown, simcity::city::Tool::Bulldoze, 12, 8)
-    [simcity::city::level_at(dug, 12, 8), simcity::city::pop_at(dug, 12, 8), simcity::sim::residents(dug), simcity::sim::residents(grown)]
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: simcity::city::level_at(dug, 12, 8),
+        people: simcity::city::pop_at(dug, 12, 8), jobs: 0, powered: 0,
+        served: 0, smoke: 0, worth: simcity::sim::residents(dug), near: 0,
+        far: simcity::sim::residents(grown), income: 0, upkeep: 0, balance: 0,
+        months: 0, capacity: 0, wide: 0, tall: 0, off_map: 0, refuses: 0,
+        wants_r: 0, wants_c: 0, differ: 0
+    }
 
-fn clearing_land_costs_money():
-    fresh = simcity::city::make(32, 32, 7, 20000)
-    road = puts(fresh, simcity::city::Tool::Road, 12, 12)
-    bare = puts(fresh, simcity::city::Tool::Bulldoze, 3, 3)
-    [std::int::to_string(simcity::city::funds(road)), std::int::to_string(simcity::city::funds(puts(road, simcity::city::Tool::Bulldoze, 12, 12))), std::int::to_string(simcity::city::funds(bare)), std::int::to_string(simcity::city::road_at(puts(road, simcity::city::Tool::Bulldoze, 12, 12), 12, 12))]
-
-# --- Map boundaries --------------------------------------------------------
-
-fn a_block_at_the_corner_cannot_be_placed():
+fn a_block_at_the_corner_cannot_be_placed() -> Report:
     fresh = simcity::city::make(16, 16, 1, 20000)
-    [fitted(simcity::actions::fits(fresh, simcity::city::Tool::Residential, 0, 0)), fitted(simcity::actions::fits(fresh, simcity::city::Tool::Residential, 1, 1))]
+    refused(code(simcity::actions::fits(fresh, simcity::city::Tool::Residential, 0, 0)), code(simcity::actions::fits(fresh, simcity::city::Tool::Residential, 1, 1)))
 
-fn nothing_is_placed_off_the_map():
+fn nothing_is_placed_off_the_map() -> Report:
     fresh = simcity::city::make(16, 16, 1, 20000)
-    [simcity::city::zone_at(fresh, 20, 3), simcity::city::road_at(fresh, 3, 20), simcity::city::terrain(fresh, -2, 3), simcity::city::funds(puts(fresh, simcity::city::Tool::Road, 30, 30))]
+    blank = empty()
+    Report {
+        money: money(puts(fresh, simcity::city::Tool::Road, 30, 30)),
+        road: 0, zone: simcity::city::road_at(fresh, 3, 20), level: 0, people: 0,
+        jobs: 0, powered: 0, served: 0, smoke: 0,
+        worth: simcity::city::terrain(fresh, -2, 3), near: 0, far: 0, income: 0,
+        upkeep: 0, balance: 0, months: 0, capacity: 0, wide: 0, tall: 0,
+        off_map: 0, refuses: 0, wants_r: 0, wants_c: 0, differ: 0
+    }
 
-fn the_map_is_the_size_it_was_made_with():
+fn the_map_is_the_size_it_was_made_with() -> Report:
     city = simcity::city::make(48, 48, 3, 1000)
-    [city.width, city.height, simcity::city::index_of(city, 47, 47), simcity::city::index_of(city, 48, 0), simcity::city::index_of(city, -1, 3), simcity::city::road_at(city, 48, 48)]
+    map_of(city.width, city.height, simcity::city::index_of(city, 48, 0), simcity::city::index_of(city, -1, 3), simcity::city::index_of(city, 47, 47))
 
 # --- Power ----------------------------------------------------------------
 
-fn a_lone_zone_has_no_power():
+fn a_lone_zone_has_no_power() -> Report:
     fresh = simcity::city::make(16, 16, 1, 20000)
     built = puts(fresh, simcity::city::Tool::Residential, 8, 8)
     stepped = simcity::sim::tick(built)
-    [simcity::city::powered_at(stepped, 8, 8), simcity::city::access_at(stepped, 8, 8)]
+    supplied(simcity::city::powered_at(stepped, 8, 8), simcity::city::access_at(stepped, 8, 8))
 
-fn a_plant_and_a_line_light_the_block_on_it():
+fn a_plant_and_a_line_light_the_block_on_it() -> Report:
     fresh = simcity::city::make(24, 24, 1, 20000)
     t1 = simcity::scenario::wires(fresh, 4, 8, 12)
     t2 = puts(t1, simcity::city::Tool::Coal, 14, 8)
     t3 = puts(t2, simcity::city::Tool::Residential, 8, 10)
     stepped = simcity::sim::tick(t3)
-    [simcity::city::powered_at(stepped, 8, 10), simcity::city::powered_at(stepped, 14, 8)]
+    supplied(simcity::city::powered_at(stepped, 8, 10), simcity::city::powered_at(stepped, 14, 8))
 
-fn a_break_in_the_line_cuts_the_power_behind_it():
-    town = town(7)
-    grown = simcity::scenario::months(town, 120)
+fn a_break_in_the_line_cuts_the_power_behind_it() -> Report:
+    t = town(7)
+    grown = simcity::scenario::months(t, 120)
     cut = puts(grown, simcity::city::Tool::Bulldoze, 18, 10)
     dark = simcity::scenario::months(cut, 36)
-    [simcity::city::powered_at(dark, 12, 8), simcity::city::powered_at(dark, 12, 20), simcity::city::population(dark)]
+    supplied(simcity::city::powered_at(dark, 12, 8), simcity::city::powered_at(dark, 12, 20))
 
-fn a_plant_beyond_its_capacity_does_not_light_everything():
+fn a_plant_beyond_its_capacity_does_not_light_everything() -> Report:
     fresh = simcity::city::make(24, 24, 1, 20000)
     t1 = simcity::scenario::wires(fresh, 4, 8, 18)
     t2 = puts(t1, simcity::city::Tool::Coal, 20, 8)
     t3 = puts(t2, simcity::city::Tool::Residential, 6, 10)
     stepped = simcity::sim::tick(t3)
-    [simcity::city::powered_at(stepped, 6, 10), simcity::sim::capacity(0, 0, stepped)]
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: 0, people: 0, jobs: 0,
+        powered: simcity::city::powered_at(stepped, 6, 10),
+        served: simcity::sim::capacity(0, 0, stepped), smoke: 0, worth: 0,
+        near: 0, far: 0, income: 0, upkeep: 0, balance: 0, months: 0,
+        capacity: 0, wide: 0, tall: 0, off_map: 0, refuses: 0, wants_r: 0,
+        wants_c: 0, differ: 0
+    }
 
 # --- Roads ----------------------------------------------------------------
 
-fn a_road_that_reaches_the_edge_serves_its_blocks():
-    town = town(7)
-    stepped = simcity::sim::tick(town)
-    [simcity::city::access_at(stepped, 10, 8), simcity::city::access_at(stepped, 12, 14)]
+fn a_road_that_reaches_the_edge_serves_its_blocks() -> Report:
+    t = town(7)
+    stepped = simcity::sim::tick(t)
+    supplied(simcity::city::access_at(stepped, 12, 8), simcity::city::access_at(stepped, 12, 14))
 
-fn a_road_that_reaches_nothing_serves_nobody():
+fn a_road_that_reaches_nothing_serves_nobody() -> Report:
     fresh = simcity::city::make(24, 24, 1, 20000)
     t1 = roads(fresh, 4, 6, 20)
     t2 = puts(t1, simcity::city::Tool::Coal, 22, 6)
     t3 = puts(t2, simcity::city::Tool::Residential, 10, 8)
     stepped = simcity::sim::tick(t3)
-    [simcity::city::access_at(stepped, 10, 8), simcity::city::level_at(stepped, 12, 8)]
+    served_level(simcity::city::level_at(stepped, 10, 8), simcity::city::access_at(stepped, 10, 8))
 
-fn a_zone_with_no_road_nearby_is_not_reached():
+fn a_zone_with_no_road_nearby_is_not_reached() -> Report:
     fresh = simcity::city::make(24, 24, 1, 20000)
     t1 = roads(fresh, 0, 6, 4)
     t2 = simcity::scenario::wires(t1, 0, 20, 4)
     t3 = puts(t2, simcity::city::Tool::Coal, 6, 20)
     t4 = puts(t3, simcity::city::Tool::Residential, 10, 8)
     stepped = simcity::sim::tick(t4)
-    [simcity::city::access_at(stepped, 10, 8), simcity::city::powered_at(stepped, 12, 8)]
+    supplied(simcity::city::powered_at(stepped, 10, 8), simcity::city::access_at(stepped, 10, 8))
 
 # --- Growth and decline ---------------------------------------------------
 
-fn a_served_powered_town_grows():
+fn a_served_powered_town_grows() -> Report:
     a = simcity::scenario::healthy(7)
-    [a.population, a.residential, a.commercial, a.industrial]
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: a.residential,
+        people: a.population, jobs: 0, powered: 0, served: 0, smoke: 0,
+        worth: 0, near: 0, far: 0, income: 0, upkeep: 0, balance: 0,
+        months: 0, capacity: 0, wide: 0, tall: 0, off_map: 0, refuses: 0,
+        wants_r: a.commercial, wants_c: a.industrial, differ: 0
+    }
 
-fn a_town_cut_off_from_power_stops_growing():
+fn a_town_cut_off_from_power_stops_growing() -> Report:
     b = simcity::scenario::blackout(7)
-    [b.population, b.residential, b.powered]
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: b.residential, people: b.population,
+        jobs: 0, powered: b.powered, served: 0, smoke: 0, worth: 0, near: 0,
+        far: 0, income: 0, upkeep: 0, balance: 0, months: 0, capacity: 0,
+        wide: 0, tall: 0, off_map: 0, refuses: 0, wants_r: 0, wants_c: 0,
+        differ: 0
+    }
 
-fn a_town_with_no_road_stops_growing():
+fn a_town_with_no_road_stops_growing() -> Report:
     c = simcity::scenario::no_road(7)
-    [c.population, c.residential, c.reached]
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: c.residential, people: c.population,
+        jobs: 0, powered: 0, served: c.reached, smoke: 0, worth: 0, near: 0,
+        far: 0, income: 0, upkeep: 0, balance: 0, months: 0, capacity: 0,
+        wide: 0, tall: 0, off_map: 0, refuses: 0, wants_r: 0, wants_c: 0,
+        differ: 0
+    }
 
-fn a_town_taxed_to_the_maximum_declines():
+fn a_town_taxed_to_the_maximum_wants_less() -> Report:
+    h = simcity::scenario::healthy(7)
+    d = simcity::scenario::taxed(7)
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: 0, people: d.population, jobs: 0,
+        powered: 0, served: 0, smoke: 0, worth: 0, near: 0, far: 0, income: 0,
+        upkeep: 0, balance: 0, months: 0, capacity: 0, wide: 0, tall: 0,
+        off_map: 0, refuses: 0, wants_r: h.demand_r, wants_c: d.demand_r,
+        differ: 0
+    }
+
+fn a_town_taxed_to_the_maximum_declines() -> Report:
     d = simcity::scenario::taxed(7)
     h = simcity::scenario::healthy(7)
-    [d.population, h.population]
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: 0, people: d.population, jobs: 0,
+        powered: 0, served: 0, smoke: 0, worth: 0, near: 0, far: 0, income: 0,
+        upkeep: 0, balance: 0, months: 0, capacity: 0, wide: 0, tall: 0,
+        off_map: 0, refuses: 0, wants_r: 0, wants_c: 0, differ: h.population
+    }
 
-fn a_town_taxed_to_the_maximum_wants_less():
-    healthy = simcity::scenario::healthy(7)
-    squeezed = simcity::scenario::taxed(7)
-    [healthy.demand_r, squeezed.demand_r]
-
-fn industry_next_door_makes_housing_worth_less():
+fn industry_next_door_makes_housing_worth_less() -> Report:
     e = simcity::scenario::smoky(7)
-    [e.nearby_value, e.far_value]
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: 0, people: 0, jobs: 0, powered: 0,
+        served: 0, smoke: e.smoke, worth: 0, near: e.nearby_value,
+        far: e.far_value, income: 0, upkeep: 0, balance: 0, months: 0,
+        capacity: 0, wide: 0, tall: 0, off_map: 0, refuses: 0, wants_r: 0,
+        wants_c: 0, differ: 0
+    }
 
-fn a_city_that_cannot_pay_goes_dark():
+fn a_city_that_cannot_pay_goes_dark() -> Report:
     f = simcity::scenario::broke(7)
-    [f.funds, f.population]
+    ground(f.funds, 0, f.population, 0)
 
-# --- Budget ---------------------------------------------------------------
+# --- Money ----------------------------------------------------------------
 
-fn the_treasury_moves_with_build_and_tax():
+fn the_treasury_moves_with_build_and_tax() -> Report:
     fresh = simcity::city::make(16, 16, 1, 20000)
     built = puts(fresh, simcity::city::Tool::Road, 4, 4)
     zoned = puts(built, simcity::city::Tool::Residential, 8, 8)
-    [simcity::city::funds(fresh), simcity::city::funds(built), simcity::city::funds(zoned)]
+    spent(money(zoned))
 
-fn a_year_of_taxes_and_upkeep_is_written_to_the_bank():
+fn a_year_of_taxes_and_upkeep_is_written_to_the_bank() -> Report:
     a = simcity::scenario::healthy(7)
-    [a.income, a.upkeep, a.balance, a.income - a.upkeep]
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: 0, people: 0, jobs: 0, powered: 0,
+        served: 0, smoke: 0, worth: 0, near: 0, far: 0, income: a.income,
+        upkeep: a.upkeep, balance: a.balance, months: 0, capacity: 0, wide: 0,
+        tall: 0, off_map: 0, refuses: 0, wants_r: 0, wants_c: 0, differ: 0
+    }
 
-fn maintenance_is_charged_every_month():
+fn maintenance_is_charged_every_month() -> Report:
     fresh = simcity::city::make(16, 16, 1, 20000)
     kept = puts(fresh, simcity::city::Tool::Police, 8, 8)
     one = simcity::sim::tick(kept)
     twelve = fold i from 0 to 11 with intermediate s one:
         simcity::sim::tick(s)
-    [simcity::city::funds(fresh), simcity::city::funds(one), simcity::city::funds(twelve), simcity::city::month(twelve)]
+    months_of(money(one), money(twelve), simcity::city::month(twelve), simcity::city::month(one))
 
 # --- Determinism ----------------------------------------------------------
 
-fn the_same_seed_and_the_same_actions_give_the_same_city():
+fn the_same_seed_and_the_same_actions_give_the_same_city() -> Report:
     one = simcity::scenario::healthy(7)
     two = simcity::scenario::healthy(7)
-    [one.population, two.population, one.residential, two.residential, one.funds, two.funds]
+    blank = empty()
+    Report {
+        money: one.funds, road: two.funds, zone: 0, level: one.residential,
+        people: two.residential, jobs: 0, powered: 0, served: 0, smoke: 0,
+        worth: 0, near: 0, far: 0, income: 0, upkeep: 0, balance: 0, months: 0,
+        capacity: 0, wide: 0, tall: 0, off_map: 0, refuses: 0, wants_r: 0,
+        wants_c: 0, differ: 0
+    }
 
-fn a_different_seed_gives_a_different_map():
+fn a_different_seed_gives_a_different_map() -> Report:
     one = simcity::city::make(16, 16, 1, 20000)
     two = simcity::city::make(16, 16, 99, 20000)
-    differ = fold y from 0 to 16 with intermediate n 0:
+    tiles = fold y from 0 to 16 with intermediate n 0:
         fold x from 0 to 16 with intermediate u n:
             if simcity::city::terrain(one, x, y) == simcity::city::terrain(two, x, y):
                 u
             else:
                 u + 1
-    [differ]
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: 0, people: 0, jobs: 0, powered: 0,
+        served: 0, smoke: 0, worth: 0, near: 0, far: 0, income: 0, upkeep: 0,
+        balance: 0, months: 0, capacity: 0, wide: 0, tall: 0, off_map: 0,
+        refuses: 0, wants_r: 0, wants_c: 0, differ: tiles
+    }
 
-fn the_months_run_on_their_own_clock():
+fn the_months_run_on_their_own_clock() -> Report:
     fresh = simcity::city::make(16, 16, 1, 20000)
     after = simcity::sim::tick(simcity::sim::tick(simcity::sim::tick(fresh)))
-    [simcity::city::ticks(fresh), simcity::city::ticks(after), simcity::city::month(fresh), simcity::city::month(after)]
+    months_of(simcity::city::ticks(fresh), simcity::city::ticks(after), simcity::city::month(fresh), simcity::city::month(after))
 
 # --- Two cities, no shared state ------------------------------------------
 
-fn two_cities_do_not_share_their_tiles():
+fn two_cities_do_not_share_their_tiles() -> Report:
     one = simcity::city::make(16, 16, 1, 20000)
     two = simcity::city::make(16, 16, 1, 20000)
     edited = puts(one, simcity::city::Tool::Road, 4, 4)
-    [simcity::city::road_at(edited, 4, 4), simcity::city::road_at(two, 4, 4)]
+    supplied(simcity::city::road_at(edited, 4, 4), simcity::city::road_at(two, 4, 4))
 
-fn building_in_one_city_does_not_spend_another_money():
+fn building_in_one_city_does_not_spend_another_money() -> Report:
     one = simcity::city::make(16, 16, 1, 20000)
     two = simcity::city::make(16, 16, 1, 20000)
     edited = puts(one, simcity::city::Tool::Coal, 8, 8)
-    [simcity::city::funds(edited), simcity::city::funds(two)]
+    months_of(money(edited), money(two), 0, 0)
 
-fn two_cities_simulate_independently():
-    town = town(7)
-    grown = simcity::scenario::months(town, 60)
+fn two_cities_simulate_independently() -> Report:
+    t = town(7)
+    grown = simcity::scenario::months(t, 60)
     quiet = simcity::city::make(16, 16, 1, 20000)
     still = simcity::sim::tick(quiet)
-    [simcity::city::population(grown), simcity::city::population(still), simcity::city::level_at(grown, 10, 8), simcity::city::level_at(still, 10, 8)]
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: simcity::city::level_at(grown, 12, 8),
+        people: simcity::city::population(grown), jobs: 0, powered: 0,
+        served: simcity::city::population(still), smoke: 0,
+        worth: simcity::city::level_at(still, 12, 8), near: 0, far: 0, income: 0,
+        upkeep: 0, balance: 0, months: 0, capacity: 0, wide: 0, tall: 0,
+        off_map: 0, refuses: 0, wants_r: 0, wants_c: 0, differ: 0
+    }
 
 # --- Rendering is not required --------------------------------------------
 
-fn the_simulation_needs_no_window():
-    town = simcity::scenario::town(7)
-    grown = simcity::scenario::months(town, 120)
+fn the_simulation_needs_no_window() -> Report:
+    t = town(7)
+    grown = simcity::scenario::months(t, 120)
     stepped = simcity::sim::tick(grown)
-    [simcity::city::population(stepped), simcity::city::funds(stepped), simcity::city::powered_at(stepped, 12, 8)]
+    blank = empty()
+    Report {
+        money: 0, road: 0, zone: 0, level: 0,
+        people: simcity::city::population(stepped), jobs: 0,
+        powered: simcity::city::funds(stepped),
+        served: simcity::city::powered_at(stepped, 12, 8), smoke: 0, worth: 0,
+        near: 0, far: 0, income: 0, upkeep: 0, balance: 0, months: 0,
+        capacity: 0, wide: 0, tall: 0, off_map: 0, refuses: 0, wants_r: 0,
+        wants_c: 0, differ: 0
+    }
 
-nomethod fn all_dark(numbers: List[int]) -> bool:
-    std::list::get(numbers, 0, 0) == 0 and std::list::get(numbers, 1, 0) == 0 and std::list::get(numbers, 2, 0) == 0
+# --- The checks ------------------------------------------------------------
 
-nomethod fn twelve_charged(numbers: List[int]) -> bool:
-    std::list::get(numbers, 0, 0) == 20000 and std::list::get(numbers, 1, 0) == 19492 and std::list::get(numbers, 2, 0) < std::list::get(numbers, 1, 0) and std::list::get(numbers, 3, 0) == 0
+nomethod fn grows_up(numbers: Report) -> bool:
+    numbers.people > 300 and numbers.level >= 3 and numbers.wants_r >= 2 and numbers.wants_c >= 2
 
-nomethod fn grows_up(numbers: List[int]) -> bool:
-    std::list::get(numbers, 0, 0) > 300 and std::list::get(numbers, 1, 0) >= 3 and std::list::get(numbers, 2, 0) >= 2 and std::list::get(numbers, 3, 0) >= 2
+nomethod fn goes_dark(numbers: Report) -> bool:
+    numbers.people < 60 and numbers.level == 0 and numbers.powered == 0
 
-nomethod fn goes_dark(numbers: List[int]) -> bool:
-    std::list::get(numbers, 0, 0) < 60 and std::list::get(numbers, 1, 0) == 0
+nomethod fn empty_run(numbers: Report) -> bool:
+    numbers.people == 0 and numbers.level == 0 and numbers.served == 0
 
-nomethod fn empty_run(numbers: List[int]) -> bool:
-    std::list::get(numbers, 0, 0) == 0 and std::list::get(numbers, 1, 0) == 0
+nomethod fn wants_less(numbers: Report) -> bool:
+    numbers.wants_c < numbers.wants_r - 30
 
-nomethod fn wants_less(numbers: List[int]) -> bool:
-    std::list::get(numbers, 1, 0) < std::list::get(numbers, 0, 0) - 30
+nomethod fn worth_less(numbers: Report) -> bool:
+    numbers.near < numbers.far - 10
 
-nomethod fn worth_less(numbers: List[int]) -> bool:
-    std::list::get(numbers, 0, 0) < std::list::get(numbers, 1, 0) - 10
+nomethod fn out_of_money(numbers: Report) -> bool:
+    numbers.money < 0
 
-nomethod fn out_of_money(numbers: List[int]) -> bool:
-    std::list::get(numbers, 0, 0) < 0
+nomethod fn fewer_people(numbers: Report) -> bool:
+    numbers.people < numbers.differ
 
-nomethod fn fewer_people(numbers: List[int]) -> bool:
-    std::list::get(numbers, 0, 0) < std::list::get(numbers, 1, 0)
+nomethod fn fewer_residents(numbers: Report) -> bool:
+    numbers.level == 0 and numbers.people == 0 and numbers.worth < numbers.far
 
-nomethod fn balances(numbers: List[int]) -> bool:
-    std::list::get(numbers, 2, 0) == std::list::get(numbers, 0, 0) - std::list::get(numbers, 1, 0)
+nomethod fn nothing_built(numbers: Report) -> bool:
+    numbers.money == 100 and numbers.zone == 0
 
-nomethod fn same_city(numbers: List[int]) -> bool:
-    std::list::get(numbers, 0, 0) == std::list::get(numbers, 1, 0) and std::list::get(numbers, 2, 0) == std::list::get(numbers, 3, 0) and std::list::get(numbers, 4, 0) == std::list::get(numbers, 5, 0)
+nomethod fn balances(numbers: Report) -> bool:
+    numbers.balance == numbers.income - numbers.upkeep
 
-nomethod fn some_differ(numbers: List[int]) -> bool:
-    std::list::get(numbers, 0, 0) > 0
+nomethod fn twelve_charged(numbers: Report) -> bool:
+    numbers.money == 19492 and numbers.money - numbers.road == 88 and numbers.far == 1
 
-nomethod fn untouched(numbers: List[int]) -> bool:
-    std::list::get(numbers, 1, 0) == 0 and std::list::get(numbers, 3, 0) == 0
+nomethod fn same_city(numbers: Report) -> bool:
+    numbers.money == numbers.road and numbers.level == numbers.people
+
+nomethod fn some_differ(numbers: Report) -> bool:
+    numbers.differ > 0
+
+nomethod fn untouched(numbers: Report) -> bool:
+    numbers.people > 300 and numbers.served == 0 and numbers.worth == 0
+
+nomethod fn a_city_anyway(numbers: Report) -> bool:
+    numbers.people > 300 and numbers.served == 1
+
+# --- The suite ------------------------------------------------------------
 
 nomethod fn register_tests():
-    std::test::value("a road costs what the palette says", [19990, 1], road_costs_what_the_palette_says)
-    std::test::value("a zone is its whole block", [9, 1, 0], a_zone_is_its_whole_block)
-    std::test::value("a second zone cannot overlap the first", [19950, 0], a_second_zone_cannot_overlap_the_first)
-    std::test::value("a road cannot be built on water", [0, 20000], a_road_cannot_be_built_on_water)
-    std::test::value("nothing is built on water", [0, 0, 20000], nothing_is_built_on_water)
-    std::test::value("the treasury stops a build it cannot pay for", [100, 0], the_treasury_stops_a_build_it_cannot_pay_for)
-    std::test::value("bulldozing takes a zone away", [0, 0, 19949], bulldozing_takes_a_zone_away)
-    std::test::value("bulldozing takes a line away", [0, 19994], bulldozing_takes_a_line_away)
-    std::test::value("clearing land costs money", ["19990", "19989", "20000", "0"], clearing_land_costs_money)
+    std::test::value("a road costs what the palette says", ground(19990, 1, 0, 0), a_road_costs_what_the_palette_says)
+    std::test::value("a zone is its whole block", zones(9, 1), a_zone_is_its_whole_block)
+    std::test::value("a second zone cannot overlap the first", ground(19950, 0, 0, 0), a_second_zone_cannot_overlap_the_first)
+    std::test::value("a road cannot be built on water", ground(20000, 0, 0, 0), a_road_cannot_be_built_on_water)
+    std::test::value("nothing is built on water", ground(20000, 0, 0, 0), nothing_is_built_on_water)
+    std::test::holds("the treasury stops a build it cannot pay for", "no zone laid and the money untouched", nothing_built, the_treasury_stops_a_build_it_cannot_pay_for)
+    std::test::value("bulldozing takes a zone away", cleared(19949, 0, 0), bulldozing_takes_a_zone_away)
+    std::test::value("bulldozing takes a line away", cleared(19994, 0, 0), bulldozing_takes_a_line_away)
+    std::test::value("clearing land costs money", cleared(19990, 19989, 20000), clearing_land_costs_money)
+    std::test::value("clearing a road leaves the tile bare", cleared_land(19990, 19989, 20000, 0), cleared_land_case)
     std::test::holds("bulldozing a grown block takes its people too", "its residents leave with it", fewer_residents, bulldozing_a_grown_block_takes_its_people_too)
-    std::test::value("a block at the corner cannot be placed", [4, 1], a_block_at_the_corner_cannot_be_placed)
-    std::test::value("nothing is placed off the map", [0, 0, 0, 20000], nothing_is_placed_off_the_map)
-    std::test::value("the map is the size it was made with", [48, 48, 2303, -1, -1, 0], the_map_is_the_size_it_was_made_with)
-    std::test::value("a lone zone has no power", [0, 0], a_lone_zone_has_no_power)
-    std::test::value("a plant and a line light the block on it", [1, 1], a_plant_and_a_line_light_the_block_on_it)
-    std::test::holds("a break in the line cuts the power behind it", "every block goes dark", all_dark, a_break_in_the_line_cuts_the_power_behind_it)
-    std::test::value("a plant beyond its capacity does not light everything", [1, 900], a_plant_beyond_its_capacity_does_not_light_everything)
-    std::test::value("a road that reaches the edge serves its blocks", [1, 1], a_road_that_reaches_the_edge_serves_its_blocks)
-    std::test::value("a road that reaches nothing serves nobody", [0, 0], a_road_that_reaches_nothing_serves_nobody)
-    std::test::value("a zone with no road nearby is not reached", [0, 0], a_zone_with_no_road_nearby_is_not_reached)
+    std::test::value("a block at the corner cannot be placed", refused(4, 1), a_block_at_the_corner_cannot_be_placed)
+    std::test::value("nothing is placed off the map", ground(20000, 0, 0, 0), nothing_is_placed_off_the_map)
+    std::test::value("the map is the size it was made with", map_of(48, 48, -1, -1, 2303), the_map_is_the_size_it_was_made_with)
+    std::test::value("a lone zone has no power", supplied(0, 0), a_lone_zone_has_no_power)
+    std::test::value("a plant and a line light the block on it", supplied(1, 1), a_plant_and_a_line_light_the_block_on_it)
+    std::test::holds("a break in the line cuts the power behind it", "every block goes dark", goes_dark, a_break_in_the_line_cuts_the_power_behind_it)
+    std::test::value("a plant beyond its capacity does not light everything", supplied(1, 900), a_plant_beyond_its_capacity_does_not_light_everything)
+    std::test::value("a road that reaches the edge serves its blocks", supplied(1, 1), a_road_that_reaches_the_edge_serves_its_blocks)
+    std::test::value("a road that reaches nothing serves nobody", served_level(0, 0), a_road_that_reaches_nothing_serves_nobody)
+    std::test::value("a zone with no road nearby is not reached", supplied(0, 0), a_zone_with_no_road_nearby_is_not_reached)
     std::test::holds("a served, powered town grows", "the population and every zone level", grows_up, a_served_powered_town_grows)
     std::test::holds("a town cut off from power stops growing", "the population and its housing level", goes_dark, a_town_cut_off_from_power_stops_growing)
     std::test::holds("a town with no road stops growing", "the population and its housing level", empty_run, a_town_with_no_road_stops_growing)
@@ -356,14 +617,14 @@ nomethod fn register_tests():
     std::test::holds("industry next door makes housing worth less", "the value of the ground beside the works", worth_less, industry_next_door_makes_housing_worth_less)
     std::test::holds("a city that cannot pay goes dark", "the treasury runs out", out_of_money, a_city_that_cannot_pay_goes_dark)
     std::test::holds("a town taxed to the maximum declines", "fewer residents than the healthy city", fewer_people, a_town_taxed_to_the_maximum_declines)
-    std::test::value("the treasury moves with build and tax", [20000, 19990, 19940], the_treasury_moves_with_build_and_tax)
+    std::test::value("the treasury moves with build and tax", spent(19940), the_treasury_moves_with_build_and_tax)
     std::test::holds("a year of taxes and upkeep balances", "the year's income less its upkeep", balances, a_year_of_taxes_and_upkeep_is_written_to_the_bank)
     std::test::holds("maintenance is charged every month", "twelve months of upkeep taken", twelve_charged, maintenance_is_charged_every_month)
     std::test::holds("the same seed and the same actions give the same city", "every figure the same", same_city, the_same_seed_and_the_same_actions_give_the_same_city)
     std::test::holds("a different seed gives a different map", "at least one tile differs", some_differ, a_different_seed_gives_a_different_map)
-    std::test::value("the months run on their own clock", [0, 3, 0, 3], the_months_run_on_their_own_clock)
-    std::test::value("two cities do not share their tiles", [1, 0], two_cities_do_not_share_their_tiles)
-    std::test::value("building in one city does not spend another money", [17000, 20000], building_in_one_city_does_not_spend_another_money)
+    std::test::value("the months run on their own clock", months_of(0, 3, 0, 3), the_months_run_on_their_own_clock)
+    std::test::value("two cities do not share their tiles", supplied(1, 0), two_cities_do_not_share_their_tiles)
+    std::test::value("building in one city does not spend another money", months_of(17000, 20000, 0, 0), building_in_one_city_does_not_spend_another_money)
     std::test::holds("two cities simulate independently", "the other city untouched", untouched, two_cities_simulate_independently)
     std::test::holds("the simulation needs no window", "a city grows with no window anywhere", a_city_anyway, the_simulation_needs_no_window)
 

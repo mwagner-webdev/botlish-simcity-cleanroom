@@ -15,9 +15,9 @@ fn mask(h: int) -> int:
 # One step of a 32-bit xorshift generator.
 fn step(state: int) -> int:
     x = mask(state)
-    a = mask(bit_xor(x, shift_left(x, 13)))
-    b = mask(bit_xor(a, shift_right(a, 17)))
-    mask(bit_xor(b, shift_left(b, 5)))
+    a = mask(bit_xor(x, x.shift_left(13)))
+    b = mask(bit_xor(a, a.shift_right(17)))
+    mask(bit_xor(b, b.shift_left(5)))
 
 # A seed of at least 1 (the zero state is a fixed point of xorshift).
 nomethod fn seed_of(n: int) -> int:
@@ -31,11 +31,11 @@ fn warm(n: int, count: int) -> int:
     if count <= 0:
         n
     else:
-        warm(step(n), count - 1)
+        step(n).warm(count - 1)
 
 # The first state of the stream SEED names.
 nomethod fn state_of(seed: int) -> int:
-    warm(seed_of(seed), 8)
+    seed_of(seed).warm(8)
 
 # The stream's next state, in a one-slot array a caller mutates in place.
 # The array is how a number crosses a `place` parameter: a struct field is

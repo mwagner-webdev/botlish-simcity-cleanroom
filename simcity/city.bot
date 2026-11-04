@@ -21,7 +21,6 @@ import simcity::rng
 # --- Terrain ---------------------------------------------------------------
 
 # --- Terrain ---------------------------------------------------------------
-# --- Terrain ---------------------------------------------------------------
 WATER = 0
 
 GRASS = 1
@@ -32,7 +31,6 @@ ROUGH = 3
 
 # --- What a tile holds -----------------------------------------------------
 
-# --- What a tile holds -----------------------------------------------------
 # --- What a tile holds -----------------------------------------------------
 # Nothing here.
 NONE = 0
@@ -71,7 +69,6 @@ TAX_MAX = 20
 
 # --- Tools ----------------------------------------------------------------
 
-# --- Tools ----------------------------------------------------------------
 # --- Tools ----------------------------------------------------------------
 # What the player can build, for the tool palette.
 enum Tool:
@@ -121,9 +118,7 @@ nomethod fn kind_of(tool: Tool) -> int:
 
 # The cost of one placement of the tool.
 nomethod fn cost_of(tool: Tool) -> int:
-    if tool == Tool::Road:
-        10
-    elif tool == Tool::Wire:
+    if tool == Tool::Wire:
         5
     elif tool == Tool::Rail:
         20
@@ -131,26 +126,21 @@ nomethod fn cost_of(tool: Tool) -> int:
         CLEAR_COST
     elif tool == Tool::Residential:
         50
-    elif tool == Tool::Commercial:
-        200
-    elif tool == Tool::Industrial:
+    elif tool == Tool::Commercial or tool == Tool::Industrial:
         200
     elif tool == Tool::Coal:
         3000
     elif tool == Tool::Nuclear:
         5000
-    elif tool == Tool::Police:
+    elif tool == Tool::Police or tool == Tool::Fire:
         500
-    elif tool == Tool::Fire:
-        500
-    elif tool == Tool::Park:
+    elif tool == Tool::Road or tool == Tool::Park:
         10
     else:
         0
 
 # --- The grid --------------------------------------------------------------
 
-# --- The grid --------------------------------------------------------------
 # --- The grid --------------------------------------------------------------
 # Every tile attribute, one array each. A tile's index is y * width + x.
 struct Grid:
@@ -209,13 +199,13 @@ BANK_SIZE = 15
 # map the game can hold (x and y under 256) and read back with one mask and
 # one shift, so a caller never has to divide.
 nomethod fn pack(x: int, y: int) -> int:
-    shift_left(y, 8) + x
+    y.shift_left(8) + x
 
 nomethod fn pack_x(i: int) -> int:
     bit_and(i, 255)
 
 nomethod fn pack_y(i: int) -> int:
-    shift_right(i, 8)
+    i.shift_right(8)
 
 # --- Terrain ---------------------------------------------------------------
 #
@@ -236,14 +226,14 @@ nomethod fn pack_y(i: int) -> int:
 # One lattice value in 0 .. 255.
 nomethod fn lattice(x: int, y: int, seed: int) -> int:
     h = seed * 2654435761 + x * 374761393 + y * 668265263
-    a = bit_xor(h, shift_right(h, 13))
+    a = bit_xor(h, h.shift_right(13))
     b = a * 1274126177
-    bit_xor(b, shift_right(b, 16)).mod(256)
+    bit_xor(b, b.shift_right(16)).mod(256)
 
 # A bilinear blend of the lattice over 32-tile cells, in 0 .. 255.
 nomethod fn blend(x: int, y: int, seed: int) -> int:
-    cx = shift_right(x, 5)
-    cy = shift_right(y, 5)
+    cx = x.shift_right(5)
+    cy = y.shift_right(5)
     nw = lattice(cx, cy, seed)
     ne = lattice(cx + 1, cy, seed)
     sw = lattice(cx, cy + 1, seed)
@@ -335,7 +325,6 @@ nomethod fn make(width: int, height: int, seed: int, start: int) -> City:
 # --- Reading a tile --------------------------------------------------------
 
 # --- Reading a tile --------------------------------------------------------
-# --- Reading a tile --------------------------------------------------------
 # WHETHER (X, Y) is a tile of the map.
 nomethod fn inside?(city: City, x: int, y: int) -> bool:
     x >= 0 and y >= 0 and x < city.width and y < city.height
@@ -352,7 +341,7 @@ nomethod fn read(city: City, field: MutableArray[int], x: int, y: int) -> int:
     if x < 0 or y < 0 or x >= city.width or y >= city.height or i < 0 or i >= field.capacity():
         0
     else:
-        std::mutable_array::at(field, i)
+        field.at(i)
 
 nomethod fn terrain(city: City, x: int, y: int) -> int:
     read(city, city.grid.land, x, y)
@@ -416,13 +405,12 @@ nomethod fn block_inside?(city: City, x: int, y: int) -> bool:
 # --- The bank --------------------------------------------------------------
 
 # --- The bank --------------------------------------------------------------
-# --- The bank --------------------------------------------------------------
 # A bank slot, or 0 outside it: the guard is the bounds proof.
 nomethod fn bank_at(city: City, slot: int) -> int:
     if slot < 0 or slot >= city.bank.capacity():
         0
     else:
-        std::mutable_array::at(city.bank, slot)
+        city.bank.at(slot)
 
 nomethod fn funds(city: City) -> int:
     bank_at(city, FUNDS)

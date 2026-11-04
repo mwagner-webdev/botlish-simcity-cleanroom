@@ -2,73 +2,118 @@
 #
 # Raven's headless mode runs the same windows, the same layout and the same
 # events as a desktop does, with synthetic input instead of a mouse. This
-# program builds the game's window, lays it out, chooses a tool, points inside
-# the map, presses the left button, lets a frame deliver it and reads the
-# city back. What it checks is what a player does: choose a tool, click the
-# map, and see the treasury move and the map change.
+# program builds the game's window, lays it out, and drives it the way a
+# player does.
+#
+# It checks three things:
+#
+#   1. a tile of the map is reachable from every corner of it -- the pointer's
+#      position must be read as the position it was given, not as one
+#      coordinate of it;
+#   2. choosing a tool and clicking the map builds, and the treasury moves;
+#   3. choosing the inspect tool and clicking a developed tile says what is
+#      there.
 import raven
+import std::float64
 import std::int
+import std::list
 import std::str
 import raven::window
 import simcity::app
 import simcity::city
+import simcity::scenario
 import simcity::screen
-import simcity::words
+import simcity::sim
 
 with context raven::create()
 with context simcity::screen::create()
 
-nomethod fn frames(times: int) -> int:
-    if times <= 0:
+nomethod fn whole(value: Float64) -> int:
+    if value < 0.0:
         0
     else:
-        drawn = raven::draw_frame():
+        std::float64::truncate(value)
+
+# Draws TIMES frames and answers how many were drawn: a fold over one count,
+# so the function has one exit rather than two that both answer zero.
+nomethod fn frames(times: int) -> int errors NonFiniteFloat:
+    fold i from 0 to times with intermediate drawn 0:
+        more = raven::draw_frame():
             on NonFiniteFloat:
                 false
-        if drawn:
-            frames(times - 1)
+        if more:
+            drawn + 1
         else:
-            0
+            drawn
 
-nomethod fn at(game: simcity::app::Game) -> simcity::city::City:
-    simcity::app::state(game).city
-
-# The road tiles inside the whole viewport.
-nomethod fn roads(city: simcity::city::City, row: int, col: int, across: int, down: int, made: int) -> int:
-    if row >= down:
-        made
-    elif col >= across:
-        roads(city, row + 1, 0, across, down, made)
-    else:
-        roads(city, row, col + 1, across, down, made + simcity::city::road_at(city, col, row))
-
-fn main() -> List[str] errors NonFiniteFloat, raven::RavenFailed:
-    raven::start(raven::headless())
-    town = simcity::city::make(24, 24, 4242, 20000)
-    game = simcity::app::build(town)
-    laid = frames(4)
-    shown = simcity::app::show(game)
-    after = frames(4)
-    where = raven::rect(game.map):
+# Where the widget was laid out by the last frame.
+nomethod fn at(widget: raven::Widget) -> raven::Rect:
+    measured = raven::rect(widget):
         on NonFiniteFloat:
             raven::Rect {x: 0.0, y: 0.0, width: 0.0, height: 0.0}
-    target_x = where.x + 40.0
-    target_y = where.y + 40.0
-    raven::window::Rwindow_inject_mouse_move(game.window.id, target_x, target_y)
-    moved = frames(3)
+    measured
+
+# Aims at the window point (PX, PY), lets the frames deliver it, and answers
+# the tile the pointer lands on: the row and column the game would build on.
+nomethod fn point(game: simcity::app::Game, laid: raven::Rect, px: int, py: int) -> simcity::screen::Place errors NonFiniteFloat:
+    game.window.id.Rwindow_inject_mouse_move(laid.x + std::float64::from_int(px), laid.y + std::float64::from_int(py))
+    moved = frames(4)
+    under = simcity::app::where_is_the_cursor(game)
+    under
+
+nomethod fn inside_code(row: int, col: int) -> int:
+    if row >= 0 and col >= 0 and row < simcity::app::DOWN and col < simcity::app::ACROSS:
+        1
+    else:
+        0
+
+# The tile's code: 1 on the map's viewport, 0 outside it.
+nomethod fn code_of(place: simcity::screen::Place) -> int:
+    inside_code(place.y, place.x)
+
+fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
+    raven::start(raven::headless())
+    # A city with something on it already, so the inspector has something to
+    # say and the click has something to change.
+    town = simcity::scenario::town(7)
+    game = simcity::app::build(town)
+    laid = frames(6)
+    shown = simcity::app::show(game)
+    more = frames(6)
+    where = at(game.map)
+    wide = whole(where.width)
+    tall = whole(where.height)
+    top_left = point(game, where, 8, 8)
+    top_right = point(game, where, wide - 8, 8)
+    bottom_left = point(game, where, 8, tall - 8)
+    bottom_right = point(game, where, wide - 8, tall - 8)
+    corners = code_of(top_left) * 1000 + code_of(top_right) * 100 + code_of(bottom_left) * 10 + code_of(bottom_right)
+    # Build a road by clicking.
     picked = simcity::app::with_tool(shown, simcity::city::Tool::Road)
     chosen = simcity::app::show(picked)
-    chosen_frames = frames(3)
-    raven::window::Rwindow_inject_mouse_button(game.window.id, raven::window::R_MOUSE_LEFT, 1)
-    pressed = frames(3)
+    chosen_frames = frames(6)
+    game.window.id.Rwindow_inject_mouse_button(raven::window::R_MOUSE_LEFT, 1)
+    pressed = frames(4)
     clicked = simcity::app::read_mouse(chosen)
-    delivered = frames(3)
-    now = at(clicked)
-    built = roads(now, 0, 0, simcity::app::ACROSS, simcity::app::DOWN, 0)
-    spent = 20000 - simcity::city::funds(now)
-    message = simcity::app::state(clicked).message
+    delivered = frames(4)
+    built = simcity::app::state(clicked).city
+    spent = 20000 - simcity::city::funds(built)
+    roads = fold row from 0 to simcity::app::DOWN with intermediate made 0:
+        fold col from 0 to simcity::app::ACROSS with intermediate u made:
+            u + simcity::city::road_at(built, col, row)
+    # Now inspect the town's own residential block.
+    looked = simcity::app::with_tool(clicked, simcity::city::Tool::Inspect)
+    looking = simcity::app::show(looked)
+    look_frames = frames(6)
+    game.window.id.Rwindow_inject_mouse_move(where.x + std::float64::from_int(12 * simcity::app::TILE_PX + 8), where.y + std::float64::from_int(8 * simcity::app::TILE_PX + 8))
+    aimed = frames(4)
+    game.window.id.Rwindow_inject_mouse_button(raven::window::R_MOUSE_LEFT, 1)
+    hit = frames(4)
+    read_tile = simcity::app::read_mouse(looking)
+    told = frames(4)
+    note = simcity::app::state(read_tile).message
     raven::stop()
-    ["spent ".concat(std::int::to_string(spent)), "roads in the viewport ".concat(std::int::to_string(built)), "the line says: ".concat(simcity::words::show_tool(simcity::city::Tool::Road)), "the note says: ".concat(message)]
+    ["the map is ".concat(std::int::to_string(wide)).append_char(',').append_char(' ').concat(std::int::to_string(tall)), "corners reachable ".concat(std::int::to_string(corners)), "spent ", std::int::to_string(spent), "roads in the viewport ".concat(std::int::to_string(roads)), "the inspector says: ".concat(note)]
 
 result = main():
     on raven::RavenFailed failure:

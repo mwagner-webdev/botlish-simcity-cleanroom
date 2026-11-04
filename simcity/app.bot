@@ -42,6 +42,8 @@ import simcity::words
 ACROSS = 26
 DOWN = 19
 TILE_PX = 16
+# The palette's width in screen pixels.
+TOOL_WIDE = 320
 
 # How fast the city runs: a choice of simulated month per timer tick. A tick
 # of the timer is a tenth of a second, so "month" is a month every half a
@@ -259,7 +261,7 @@ nomethod fn with_cursor(game: Game, cursor_x: int, cursor_y: int, held: bool) ->
 # --- The window ------------------------------------------------------------
 
 nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
-    window = raven::window("SimCity", 940, 640)
+    window = raven::window("SimCity", 940, 460)
     funds = raven::label(simcity::words::show_funds(city))
     people = raven::label(simcity::words::show_people(city))
     jobs = raven::label(simcity::words::show_jobs(city))
@@ -270,16 +272,26 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
     want_i = raven::label(simcity::words::show_demand(city, 2))
     note = raven::label("Build something.")
     tax = raven::spin_box(0.0, 20.0)
-    raven::set_spin_box_value(tax, std::float64::from_int(simcity::city::tax_rate(city)))
+    tax.set_spin_box_value(std::float64::from_int(simcity::city::tax_rate(city)))
     top = raven::hbox().add(funds).add(people).add(jobs).add(date).add(tempo)
     demand = raven::hbox().add(want_r).add(want_c).add(want_i)
     map = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_IMAGE)}
-    raven::widget::Rwidget_set_size(map.id, screen_width(), screen_height())
+    map.id.Rwidget_set_size(screen_width(), screen_height())
+    # The map sits in a box that holds its size: a map stretched to the panel's
+    # height would draw its tiles as rectangles rather than squares.
+    map_box = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_SIZE_BOX)}
+    map_box.add(map)
+    map_box.id.Rwidget_set_size(screen_width(), screen_height())
     sides = simcity::toolbar::column()
-    body = raven::hbox().add(map).add(sides)
+    # The palette is held to the map's height too, so the row beside the map
+    # is not taller than it and the map is not stretched to match.
+    tool_box = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_SIZE_BOX)}
+    tool_box.add(sides)
+    tool_box.id.Rwidget_set_size(std::float64::from_int(TOOL_WIDE), screen_height())
+    body = raven::hbox().add(map_box).add(tool_box)
     lower = raven::hbox().add(note).add(tax)
     column = raven::vbox().add(top).add(demand).add(body).add(lower)
-    raven::set_content(window, column)
+    window.set_content(column)
     started = State {
         city: city,
         tool: simcity::city::Tool::None,
@@ -297,7 +309,7 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
         state: std::mutable_array::create(1, started),
         clock: raven::timer(0.1, true),
         window: window,
-        map: map,
+        map: map_box,
         funds: funds,
         people: people,
         jobs: jobs,
@@ -348,20 +360,20 @@ nomethod fn map_file(game: Game) -> Game:
                 simcity::screen::none_texture()
             on simcity::screen::OutOfRange:
                 simcity::screen::none_texture()
-        raven::controls::Rimage_set_texture(game.map.id, fresh)
+        game.map.id.Rimage_set_texture(fresh)
         clear(game)
 
 nomethod fn show(game: Game) -> Game:
     s = state(game)
-    raven::set_text(game.funds, simcity::words::show_funds(s.city))
-    raven::set_text(game.people, simcity::words::show_people(s.city))
-    raven::set_text(game.jobs, simcity::words::show_jobs(s.city))
-    raven::set_text(game.date, simcity::words::show_date(s.city))
-    raven::set_text(game.tempo, speed_label(s.speed))
-    raven::set_text(game.want_r, simcity::words::show_demand(s.city, 0))
-    raven::set_text(game.want_c, simcity::words::show_demand(s.city, 1))
-    raven::set_text(game.want_i, simcity::words::show_demand(s.city, 2))
-    raven::set_text(game.note, s.message)
+    game.funds.set_text(simcity::words::show_funds(s.city))
+    game.people.set_text(simcity::words::show_people(s.city))
+    game.jobs.set_text(simcity::words::show_jobs(s.city))
+    game.date.set_text(simcity::words::show_date(s.city))
+    game.tempo.set_text(speed_label(s.speed))
+    game.want_r.set_text(simcity::words::show_demand(s.city, 0))
+    game.want_c.set_text(simcity::words::show_demand(s.city, 1))
+    game.want_i.set_text(simcity::words::show_demand(s.city, 2))
+    game.note.set_text(s.message)
     map_file(game)
 
 # --- The mouse -------------------------------------------------------------
@@ -396,6 +408,14 @@ nomethod fn tile_under(game: Game) -> simcity::screen::Place errors NonFiniteFlo
             0
     simcity::screen::place_of(s.origin_x + tile, s.origin_y + row)
 
+# The tile the pointer is over right now, read from the window: the preview
+# follows the pointer, and this is what a test aims at.
+nomethod fn where_is_the_cursor(game: Game) -> simcity::screen::Place:
+    under = tile_under(game):
+        on NonFiniteFloat:
+            simcity::screen::place_of(-1, -1)
+    under
+
 # --- What the player does --------------------------------------------------
 
 nomethod fn budget_line(city: simcity::city::City) -> str:
@@ -407,7 +427,7 @@ nomethod fn begin(game: Game) -> Game:
     with_message(restarted, "A new town on new land.")
 
 nomethod fn inspect(game: Game) -> Game:
-    with_tool(game, simcity::city::Tool::Inspect)
+    with_message(with_tool(game, simcity::city::Tool::Inspect), "Inspect: click a tile to read what is on it.")
 
 nomethod fn rate(game: Game) -> Game:
     value = raven::spin_box_value(game.tax):
@@ -472,13 +492,17 @@ nomethod fn read_mouse(game: Game) -> Game errors NonFiniteFloat:
     button = simcity::screen::down?(game.window, raven::window::R_MOUSE_LEFT)
     s = state(game)
     if button and simcity::city::inside?(s.city, where.x, where.y):
-        outcome = simcity::actions::fits(s.city, s.tool, where.x, where.y)
-        if outcome == simcity::actions::Placed::Built:
-            built = with_city(game, simcity::actions::place(s.city, s.tool, where.x, where.y))
-            with_cursor(built, where.x, where.y, button)
+        if s.tool == Tool::Inspect:
+            looked = with_message(game, simcity::words::show_tile(s.city, where.x, where.y))
+            with_cursor(looked, where.x, where.y, button)
         else:
-            said = with_message(game, simcity::words::show_refusal(outcome))
-            with_cursor(said, where.x, where.y, button)
+            outcome = simcity::actions::fits(s.city, s.tool, where.x, where.y)
+            if outcome == simcity::actions::Placed::Built:
+                built = with_city(game, simcity::actions::place(s.city, s.tool, where.x, where.y))
+                with_cursor(built, where.x, where.y, button)
+            else:
+                said = with_message(game, simcity::words::show_refusal(outcome))
+                with_cursor(said, where.x, where.y, button)
     else:
         with_cursor(game, where.x, where.y, button)
 

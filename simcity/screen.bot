@@ -56,17 +56,11 @@ import raven::resources
 
 import raven::window
 
-
-
 extern c library "raven_bridge" static
-
-
 
 private extern c fn calloc(count: std::ffi::c::ULong, size: std::ffi::c::ULong) -> std::ffi::c::Ptr[std::ffi::c::Void] independent
 
 private extern c fn free(memory: std::ffi::c::Ptr[std::ffi::c::Void]) -> unit
-
-
 
 # memcpy(out, data, count) through the package's bridge: DATA is lent read-only
 
@@ -75,8 +69,6 @@ private extern c fn free(memory: std::ffi::c::Ptr[std::ffi::c::Void]) -> unit
 # by exactly one copy.
 
 private extern c fn botlish_raven_bytes_copy(data: std::ffi::c::Ptr[std::ffi::c::UChar] read noescape, out: std::ffi::c::Ptr[std::ffi::c::UChar] write noescape, count: std::ffi::c::ULong) -> std::ffi::c::ULong
-
-
 
 error OutOfRange
 
@@ -101,10 +93,14 @@ nomethod fn c_int(n: int) -> std::ffi::c::Int errors OutOfRange:
 nomethod fn flat_bytes(rows: List[List[std::byte::Byte]]) -> List[std::byte::Byte]:
     std::list::flat(rows)
 
-# One allocation of this module's memory.
+# One allocation of this module's memory. The pointer Raven writes the mouse's
+# position into is TWO pointers, one for x and one for y: a C pointer has no
+# arithmetic, so the pair cannot be one stepped pointer, and passing one
+# address for both would write y over x and leave the other unwritten.
 private struct Cell:
     bytes: std::ffi::c::Ptr[std::ffi::c::UChar]
-    xy: std::ffi::c::Ptr[std::ffi::c::Float]
+    mx: std::ffi::c::Ptr[std::ffi::c::Float]
+    my: std::ffi::c::Ptr[std::ffi::c::Float]
     size: int
 
 # One C float in native memory.
@@ -133,24 +129,36 @@ nomethod fn open(width: int, height: int, context s: Screen) -> unit errors OutO
     else:
         0
     if s.cells.empty?():
-        frame = calloc(u_long(1), u_long(want))
-        mouse = calloc(u_long(1), u_long(8))
-        if frame.null?() or mouse.null?():
+        frame = u_long(1).calloc(u_long(want))
+        mx = u_long(1).calloc(u_long(4))
+        my = u_long(1).calloc(u_long(4))
+        if frame.null?() or mx.null?() or my.null?():
             gone = std::ffi::c::erase(frame)
-            gone2 = std::ffi::c::erase(mouse)
+            gone2 = std::ffi::c::erase(mx)
+            gone3 = std::ffi::c::erase(my)
             free(gone)
             free(gone2)
+            free(gone3)
             fail OutOfRange
-        cell = Cell {bytes: std::ffi::c::retype[std::ffi::c::UChar](frame), xy: std::ffi::c::retype[std::ffi::c::Float](mouse), size: total}
+        cell = Cell {
+            bytes: std::ffi::c::retype[std::ffi::c::UChar](frame),
+            mx: std::ffi::c::retype[std::ffi::c::Float](mx),
+            my: std::ffi::c::retype[std::ffi::c::Float](my),
+            size: total
+        }
         s.cells.push(cell)
     else:
         unit
 
 nomethod fn release(context s: Screen) -> unit errors IndexNotFound:
     cell = s.cells.pop()
-    {bytes} = cell
+    {bytes, mx, my} = cell
     gone = std::ffi::c::erase(bytes)
+    gone2 = std::ffi::c::erase(mx)
+    gone3 = std::ffi::c::erase(my)
     free(gone)
+    free(gone2)
+    free(gone3)
 
 # Raven's handle for a texture holding PIXELS, which must be exactly
 # 4 * WIDTH * HEIGHT bytes: it is lent read-only for the upload.
@@ -159,7 +167,7 @@ nomethod fn texture_of(pixels: std::abi::bytes::Bytes, width: int, height: int, 
     wide = c_int(width)
     high = c_int(height)
     pixels.botlish_raven_bytes_copy(s.cells.element(0).bytes, count)
-    raven::resources::Rtexture_create_from_pixels(s.cells.element(0).bytes, wide, high)
+    s.cells.element(0).bytes.Rtexture_create_from_pixels(wide, high)
 
 # Uploads PIXELS (a whole frame, 4 * WIDTH * HEIGHT of them) into the buffer
 # and tells Raven the texture changed.
@@ -168,22 +176,22 @@ nomethod fn show(pixels: std::abi::bytes::Bytes, texture: std::ffi::c::UInt, wid
     wide = c_int(width)
     high = c_int(height)
     pixels.botlish_raven_bytes_copy(s.cells.element(0).bytes, count)
-    raven::resources::Rtexture_update(texture, s.cells.element(0).bytes, wide, high)
+    texture.Rtexture_update(s.cells.element(0).bytes, wide, high)
 
 # The mouse's position in the window's last frame, in logical units: Raven
 # writes it into the screen's out-parameters and they are read back. A NaN or
 # an infinity, which no window reports, is NonFiniteFloat.
 nomethod fn mouse_at(window: raven::Window, context s: Screen) -> List[Float64] errors IndexNotFound, NativeViewNull, OutOfRange, NonFiniteFloat:
-    raven::window::Rwindow_get_mouse_position(window.id, s.cells.element(0).xy, s.cells.element(0).xy)
-    view = std::binary::native::view(FloatCell, s.cells.element(0).xy)
-    here = std::binary::native::view(FloatCell, s.cells.element(0).xy)
-    [view.value, here.value]
+    window.id.Rwindow_get_mouse_position(s.cells.element(0).mx, s.cells.element(0).my)
+    here = std::binary::native::view(FloatCell, s.cells.element(0).mx)
+    there = std::binary::native::view(FloatCell, s.cells.element(0).my)
+    [here.value, there.value]
 
 nomethod fn down?(window: raven::Window, button: std::ffi::c::UInt) -> bool:
-    raven::window::Rwindow_is_mouse_button_down(window.id, button) != 0
+    window.id.Rwindow_is_mouse_button_down(button) != 0
 
 nomethod fn key_down(window: raven::Window, key: std::ffi::c::UInt) -> bool:
-    raven::window::Rwindow_is_key_down(window.id, key) != 0
+    window.id.Rwindow_is_key_down(key) != 0
 
 nomethod fn inside(window: raven::Window) -> bool:
     raven::window::Rwindow_is_mouse_inside(window.id) != 0

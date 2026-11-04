@@ -21,15 +21,13 @@ import simcity::city
 
 import simcity::words
 
-
-
 # One button that fires the named action.
 
 # One button that fires the named action.
 
 nomethod fn action(text: str, name: str) -> raven::Widget:
     made = raven::button(text)
-    raven::set_action(made, name)
+    made.set_action(name)
     made
 
 # One button that fires the named action.
