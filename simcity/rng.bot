@@ -1,0 +1,67 @@
+# simcity::rng -- the deterministic randomness the game is allowed.
+#
+# Everything pseudo-random in the simulation comes from one integer stream:
+# the same seed gives the same stream forever, so a city rebuilt from a save
+# and replayed with the same actions follows the same course. Botlish's Int is
+# arbitrary-precision and its bit operations are `nomethod`, so the generator
+# is written with plain calls and a 32-bit state kept in range by masking.
+import std::list
+import std::mutable_array
+
+# A 32-bit mask.
+fn mask(h: int) -> int:
+    bit_and(h, 4294967295)
+
+# One step of a 32-bit xorshift generator.
+fn step(state: int) -> int:
+    x = mask(state)
+    a = mask(bit_xor(x, shift_left(x, 13)))
+    b = mask(bit_xor(a, shift_right(a, 17)))
+    mask(bit_xor(b, shift_left(b, 5)))
+
+# A seed of at least 1 (the zero state is a fixed point of xorshift).
+nomethod fn seed_of(n: int) -> int:
+    if n == 0:
+        1
+    else:
+        mask(n)
+
+# Warmed up past the weak first values of a short seed.
+fn warm(n: int, count: int) -> int:
+    if count <= 0:
+        n
+    else:
+        warm(step(n), count - 1)
+
+# The first state of the stream SEED names.
+nomethod fn state_of(seed: int) -> int:
+    warm(seed_of(seed), 8)
+
+# The stream's next state, in a one-slot array a caller mutates in place.
+# The array is how a number crosses a `place` parameter: a struct field is
+# immutable, so the numbers a tick changes live in mutable collections.
+fn advance(place state: MutableArray[int]) -> int errors IndexNotFound:
+    current = std::mutable_array::at(state, 0)
+    next = step(current)
+    state.set(0, next)
+    next
+
+# The next value of the stream, an int in 0 .. N - 1 (0 when N is not positive).
+fn below(place state: MutableArray[int], n: int) -> int errors IndexNotFound:
+    if n <= 0:
+        advance(state).mod(1)
+    else:
+        advance(state).mod(n)
+
+# A one in N chance, deterministically.
+fn chance(place state: MutableArray[int], n: int) -> bool errors IndexNotFound:
+    if n <= 1:
+        true
+    else:
+        advance(state).mod(n) == 0
+
+fn one_of(place state: MutableArray[int], choices: List[int]) -> int errors IndexNotFound:
+    if choices.length() == 0:
+        0
+    else:
+        choices.at(advance(state).mod(choices.length()))

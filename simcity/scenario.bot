@@ -1,0 +1,327 @@
+# simcity::scenario -- the six cities the tests build, and what they show.
+
+#
+
+# Every scenario here is a scripted sequence of the same construction actions
+
+# the windowed game performs, advanced by the same `simcity::sim::tick` the
+
+# windowed game calls, and read back through the same accessors. None of them
+
+# draws anything, and none of them knows a window exists, which is the point:
+
+# what the tests assert is what the game does.
+
+#
+
+# The layout each one builds is the same small town -- a road along the edge,
+
+# a power line, a coal plant, and a row of residential, commercial and
+
+# industrial blocks -- because a scenario is only meaningful if the one thing
+
+# it changes is the thing under test.
+
+import std::int
+
+import simcity::actions
+
+import simcity::city
+
+import simcity::sim
+
+
+
+# What a scenario measured.
+
+
+
+# --- Building the town -----------------------------------------------------
+
+# What a scenario measured.
+
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+# What a scenario measured.
+# --- Building the town -----------------------------------------------------
+# What a scenario measured.
+nomethod fn puts(city: simcity::city::City, tool: simcity::city::Tool, x: int, y: int) -> simcity::city::City:
+    simcity::actions::place(city, tool, x, y)
+
+# A road of X1 - X0 + 1 tiles along row Y, starting at (X0, Y).
+nomethod fn road(city: simcity::city::City, x0: int, y: int, x1: int) -> simcity::city::City:
+    if x0 > x1:
+        city
+    else:
+        road(puts(city, simcity::city::Tool::Road, x0, y), x0 + 1, y, x1)
+
+nomethod fn road_up(city: simcity::city::City, x: int, y0: int, y1: int) -> simcity::city::City:
+    if y0 > y1:
+        city
+    else:
+        road_up(puts(city, simcity::city::Tool::Road, x, y0), x, y0 + 1, y1)
+
+nomethod fn wire_up(city: simcity::city::City, x: int, y0: int, y1: int) -> simcity::city::City:
+    if y0 > y1:
+        city
+    else:
+        wire_up(puts(city, simcity::city::Tool::Wire, x, y0), x, y0 + 1, y1)
+
+nomethod fn wires(city: simcity::city::City, x0: int, y: int, x1: int) -> simcity::city::City:
+    if x0 > x1:
+        city
+    else:
+        wires(puts(city, simcity::city::Tool::Wire, x0, y), x0 + 1, y, x1)
+
+nomethod fn months(city: simcity::city::City, n: int) -> simcity::city::City:
+    fold i from 0 to n with intermediate s city:
+        simcity::sim::tick(s)
+
+# The town every scenario starts from: a road to the edge, a power line, a
+# coal plant, and residential, commercial and industrial blocks fed by both.
+# The plant sits apart from every block so that no zone block can bridge a
+# break in the power line -- a scenario is only meaningful when the wire is
+# the only path.
+# A big town on an already-made map of WIDTH by HEIGHT, for the benchmark:
+# the same layout as town, on a map twice the size.
+nomethod fn town2(fresh: simcity::city::City) -> simcity::city::City:
+    t1 = road_up(fresh, 8, 2, 42)
+    t2 = wire_up(t1, 12, 2, 42)
+    t3 = wires(t2, 13, 20, 40)
+    t4 = puts(t3, simcity::city::Tool::Coal, 42, 20)
+    t5 = puts(t4, simcity::city::Tool::Residential, 10, 6)
+    t6 = puts(t5, simcity::city::Tool::Commercial, 10, 10)
+    t7 = puts(t6, simcity::city::Tool::Industrial, 10, 14)
+    t8 = puts(t7, simcity::city::Tool::Residential, 10, 18)
+    t9 = puts(t8, simcity::city::Tool::Commercial, 10, 22)
+    ta = puts(t9, simcity::city::Tool::Industrial, 10, 26)
+    tb = puts(ta, simcity::city::Tool::Residential, 10, 30)
+    tc = puts(tb, simcity::city::Tool::Industrial, 10, 34)
+    td = puts(tc, simcity::city::Tool::Police, 10, 38)
+    te = puts(td, simcity::city::Tool::Fire, 10, 42)
+    te
+
+# The same town on an already-made map, so a caller may choose the map's size.
+nomethod fn town_map(fresh: simcity::city::City) -> simcity::city::City:
+    t1 = road_up(fresh, 10, 0, 23)
+    t2 = wire_up(t1, 14, 0, 23)
+    t3 = wires(t2, 15, 10, 23)
+    t4 = puts(t3, simcity::city::Tool::Coal, 25, 10)
+    t5 = puts(t4, simcity::city::Tool::Residential, 12, 8)
+    t6 = puts(t5, simcity::city::Tool::Commercial, 12, 14)
+    t7 = puts(t6, simcity::city::Tool::Industrial, 12, 20)
+    t7
+
+# What a scenario measured.
+struct Metrics:
+    months: int
+    population: int
+    funds: int
+    demand_r: int
+    demand_c: int
+    demand_i: int
+    residential: int
+    commercial: int
+    industrial: int
+    powered: int
+    reached: int
+    smoke: int
+    nearby_value: int
+    far_value: int
+    income: int
+    upkeep: int
+    balance: int
+
+nomethod fn empty() -> Metrics:
+    Metrics {months: 0, population: 0, funds: 0, demand_r: 0, demand_c: 0, demand_i: 0, residential: 0, commercial: 0, industrial: 0, powered: 0, reached: 0, smoke: 0, nearby_value: 0, far_value: 0, income: 0, upkeep: 0, balance: 0}
+
+nomethod fn notes(city: simcity::city::City, months: int) -> Metrics:
+    meet = empty()
+    Metrics {
+        months: months,
+        population: simcity::city::population(city),
+        funds: simcity::city::funds(city),
+        demand_r: simcity::city::demand_r(city),
+        demand_c: simcity::city::demand_c(city),
+        demand_i: simcity::city::demand_i(city),
+        residential: simcity::city::level_at(city, 12, 8),
+        commercial: simcity::city::level_at(city, 12, 14),
+        industrial: simcity::city::level_at(city, 12, 20),
+        powered: simcity::city::powered_at(city, 12, 8),
+        reached: simcity::city::access_at(city, 12, 8),
+        smoke: simcity::city::pollution_at(city, 12, 6),
+        nearby_value: simcity::city::value_at(city, 12, 6),
+        far_value: simcity::city::value_at(city, 12, 26),
+        income: simcity::city::income_year(city),
+        upkeep: simcity::city::upkeep_year(city),
+        balance: simcity::city::balance_year(city)
+    }
+
+#
+# The same blocks, but the road never reaches the edge of the map, so nothing
+# is served: they stay empty while a served twin of them grows.
+nomethod fn no_road(seed: int) -> Metrics:
+    fresh = simcity::city::make(32, 32, seed, 20000)
+    t1 = road(fresh, 4, 6, 23)
+    t2 = wires(t1, 8, 10, 23)
+    t3 = puts(t2, simcity::city::Tool::Coal, 25, 10)
+    t4 = puts(t3, simcity::city::Tool::Residential, 10, 8)
+    t5 = puts(t4, simcity::city::Tool::Commercial, 16, 8)
+    grown = months(t5, 180)
+    notes(grown, 180)
+
+#
+# A city that builds far more than it can afford: the treasury runs out and
+# the blocks that cannot be paid for go dark.
+nomethod fn broke(seed: int) -> Metrics:
+    fresh = simcity::city::make(32, 32, seed, 20000)
+    t1 = road_up(fresh, 10, 0, 23)
+    t2 = wire_up(t1, 14, 0, 23)
+    t3 = wires(t2, 15, 10, 23)
+    t4 = puts(t3, simcity::city::Tool::Nuclear, 25, 10)
+    t5 = puts(t4, simcity::city::Tool::Nuclear, 25, 16)
+    t6 = puts(t5, simcity::city::Tool::Nuclear, 25, 22)
+    t7 = puts(t6, simcity::city::Tool::Residential, 12, 8)
+    t8 = puts(t7, simcity::city::Tool::Residential, 12, 14)
+    t9 = puts(t8, simcity::city::Tool::Police, 12, 17)
+    ta = puts(t9, simcity::city::Tool::Fire, 12, 23)
+    tb = puts(ta, simcity::city::Tool::Fire, 6, 23)
+    after = months(tb, 240)
+    notes(after, 240)
+
+nomethod fn town(seed: int) -> simcity::city::City:
+    town_map(simcity::city::make(32, 32, seed, 20000))
+
+#
+# Power, a road to the edge, balanced zoning and a reasonable tax: the city
+# fills up and pays for itself.
+nomethod fn healthy(seed: int) -> Metrics:
+    town = town(seed)
+    grown = months(town, 240)
+    notes(grown, 240)
+
+#
+# Break the one wire that carries the city's power: the blocks the plant can
+# no longer reach lose their development.
+nomethod fn blackout(seed: int) -> Metrics:
+    town = town(seed)
+    grown = months(town, 180)
+    cut = puts(grown, simcity::city::Tool::Bulldoze, 18, 10)
+    dark = months(cut, 36)
+    notes(dark, 216)
+
+#
+# The same healthy city, taxed to the maximum: demand collapses and the
+# development that was there starts to leave.
+nomethod fn taxed(seed: int) -> Metrics:
+    town = town(seed)
+    grown = months(town, 180)
+    squeezed = simcity::city::with_bank(grown, simcity::city::TAX, simcity::city::TAX_MAX)
+    after = months(squeezed, 96)
+    notes(after, 276)
+
+#
+# A healthy city with an industrial block moved next door to its housing:
+# the ground beside the works is worth less than the ground on the far side
+# of town.
+nomethod fn smoky(seed: int) -> Metrics:
+    town = town(seed)
+    grown = months(town, 180)
+    works = puts(grown, simcity::city::Tool::Industrial, 12, 4)
+    after = months(works, 96)
+    notes(after, 276)
+
+nomethod fn names() -> List[str]:
+    ["healthy growth", "power failure", "no road", "excessive tax", "industrial smoke", "no money"]

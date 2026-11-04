@@ -1,0 +1,78 @@
+# gametest.bot -- the windowed game, exercised with no display.
+#
+# Raven's headless mode runs the same windows, the same layout and the same
+# events as a desktop does, with synthetic input instead of a mouse. This
+# program builds the game's window, lays it out, chooses a tool, points inside
+# the map, presses the left button, lets a frame deliver it and reads the
+# city back. What it checks is what a player does: choose a tool, click the
+# map, and see the treasury move and the map change.
+import raven
+import std::int
+import std::str
+import raven::window
+import simcity::app
+import simcity::city
+import simcity::screen
+import simcity::words
+
+with context raven::create()
+with context simcity::screen::create()
+
+nomethod fn frames(times: int) -> int:
+    if times <= 0:
+        0
+    else:
+        drawn = raven::draw_frame():
+            on NonFiniteFloat:
+                false
+        if drawn:
+            frames(times - 1)
+        else:
+            0
+
+nomethod fn at(game: simcity::app::Game) -> simcity::city::City:
+    simcity::app::state(game).city
+
+# The road tiles inside the whole viewport.
+nomethod fn roads(city: simcity::city::City, row: int, col: int, across: int, down: int, made: int) -> int:
+    if row >= down:
+        made
+    elif col >= across:
+        roads(city, row + 1, 0, across, down, made)
+    else:
+        roads(city, row, col + 1, across, down, made + simcity::city::road_at(city, col, row))
+
+fn main() -> List[str] errors NonFiniteFloat, raven::RavenFailed:
+    raven::start(raven::headless())
+    town = simcity::city::make(24, 24, 4242, 20000)
+    game = simcity::app::build(town)
+    laid = frames(4)
+    shown = simcity::app::show(game)
+    after = frames(4)
+    where = raven::rect(game.map):
+        on NonFiniteFloat:
+            raven::Rect {x: 0.0, y: 0.0, width: 0.0, height: 0.0}
+    target_x = where.x + 40.0
+    target_y = where.y + 40.0
+    raven::window::Rwindow_inject_mouse_move(game.window.id, target_x, target_y)
+    moved = frames(3)
+    picked = simcity::app::with_tool(shown, simcity::city::Tool::Road)
+    chosen = simcity::app::show(picked)
+    chosen_frames = frames(3)
+    raven::window::Rwindow_inject_mouse_button(game.window.id, raven::window::R_MOUSE_LEFT, 1)
+    pressed = frames(3)
+    clicked = simcity::app::read_mouse(chosen)
+    delivered = frames(3)
+    now = at(clicked)
+    built = roads(now, 0, 0, simcity::app::ACROSS, simcity::app::DOWN, 0)
+    spent = 20000 - simcity::city::funds(now)
+    message = simcity::app::state(clicked).message
+    raven::stop()
+    ["spent ".concat(std::int::to_string(spent)), "roads in the viewport ".concat(std::int::to_string(built)), "the line says: ".concat(simcity::words::show_tool(simcity::city::Tool::Road)), "the note says: ".concat(message)]
+
+result = main():
+    on raven::RavenFailed failure:
+        ["Raven did not start", failure.detail]
+    on NonFiniteFloat:
+        ["a figure Raven reported is not a number"]
+result

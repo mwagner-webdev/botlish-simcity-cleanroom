@@ -1,0 +1,245 @@
+# simcity::render -- the city as pixels.
+#
+# The map is drawn into one RGBA byte list which the game's screen uploads as
+# a texture: TILE texture pixels to a side for every map tile, so a whole
+# viewport is one list of bytes and redrawing one tile is redrawing one tile.
+# Four texture pixels per tile is enough for a readable 4 by 4 block at 1989's
+# level of detail, and it keeps the whole redraw of a developed viewport well
+# inside a tenth of a second of Botlish work.
+#
+# A frame is built with collecting loops, because Botlish has no list
+# concatenation: each loop collects its own rows, and the loops are nested so
+# that the outermost one collects whole texture-pixel rows of the viewport.
+#
+# A colour is a packed integer, red in the high byte and blue in the low,
+# because a module-level binding may not construct a struct -- a constant in
+# Botlish is a number or a string, never a value of its own making.
+import std::byte
+import std::float64
+import std::list
+import type simcity::city::Tool
+import simcity::city
+
+# Texture pixels per map tile.
+
+# Texture pixels per map tile.
+
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+TILE = 4
+
+# --- The palette -----------------------------------------------------------
+#
+# Every colour here is made up for this game. The greens and greys of the
+# ground, the blue of the roads, the yellow of the wires: the map reads by hue,
+# so a developed tile, a plant and a bare tile are not the same on screen.
+WATER_INK = 38 * 65536 + 74 * 256 + 128
+
+GRASS_INK = 72 * 65536 + 122 * 256 + 66
+
+TREES_INK = 44 * 65536 + 90 * 256 + 48
+
+ROUGH_INK = 120 * 65536 + 112 * 256 + 80
+
+ROAD_INK = 84 * 65536 + 84 * 256 + 88
+
+WIRE_INK = 96 * 65536 + 92 * 256 + 88
+
+WIRE_LIVE = 232 * 65536 + 196 * 256 + 60
+
+RAIL_INK = 110 * 65536 + 98 * 256 + 82
+
+ZONE_RES_INK = 126 * 65536 + 190 * 256 + 116
+
+ZONE_COM_INK = 126 * 65536 + 164 * 256 + 214
+
+ZONE_IND_INK = 168 * 65536 + 168 * 256 + 190
+
+ZONE_BARE = 200 * 65536 + 200 * 256 + 180
+
+COAL_INK = 126 * 65536 + 104 * 256 + 92
+
+NUCLEAR_INK = 206 * 65536 + 206 * 256 + 132
+
+POLICE_INK = 96 * 65536 + 116 * 256 + 202
+
+FIRE_INK = 202 * 65536 + 100 * 256 + 88
+
+PARK_INK = 96 * 65536 + 186 * 256 + 96
+
+CURSOR_INK = 244 * 65536 + 240 * 256 + 214
+
+# --- A colour ---------------------------------------------------------------
+nomethod fn channel(v: int) -> int:
+    if v < 0:
+        0
+    elif v > 255:
+        255
+    else:
+        v
+
+nomethod fn blue(ink: int) -> std::byte::Byte errors std::byte::AboveRange, std::byte::BelowRange:
+    std::byte::from_int(channel(bit_and(ink, 255)))
+
+nomethod fn flat(rows: List[List[std::byte::Byte]]) -> List[std::byte::Byte]:
+    std::list::flat(rows)
+
+nomethod fn zone_ink(kind: int, level: int) -> int:
+    if level <= 0:
+        ZONE_BARE
+    elif kind == simcity::city::RES:
+        ZONE_RES_INK
+    elif kind == simcity::city::COM:
+        ZONE_COM_INK
+    else:
+        ZONE_IND_INK
+
+# A developed tile draws a bright core inside its tile, one texture-pixel row
+# taller for every level it has: growth is visible as the core grows.
+nomethod fn core_rows(city: simcity::city::City, x: int, y: int) -> int:
+    level = simcity::city::level_at(city, x, y)
+    if level <= 0:
+        0
+    elif level > TILE - 1:
+        TILE - 1
+    else:
+        level
+
+# --- The frame -------------------------------------------------------------
+
+# --- The frame -------------------------------------------------------------
+# --- Integer division, written out -----------------------------------------
+#
+# `/` divides Float64 values only and Botlish has no integer division, so the
+# two divisions a frame needs (a texture-pixel row into its map row, and a
+# packed colour into its channels) are thirty-two restoring steps, bit by bit.
+nomethod fn whole(value: Float64) -> int:
+    if value < 0.0:
+        0
+    else:
+        std::float64::truncate(value)
+
+nomethod fn div_bits(a: int, b: int, rem: int, q: int, bit: int) -> int:
+    if bit < 0:
+        q
+    else:
+        here = shift_left(rem, 1) + bit_and(shift_right(a, bit), 1)
+        fits = here >= b
+        rest = if fits:
+            here - b
+        else:
+            here
+        next_q = if fits:
+            shift_left(q, 1) + 1
+        else:
+            shift_left(q, 1)
+        div_bits(a, b, rest, next_q, bit - 1)
+
+nomethod fn div(a: int, b: int) -> int:
+    if b <= 0:
+        0
+    elif a < 0:
+        -div(-a, b)
+    else:
+        div_bits(a, b, 0, 0, 31)
+
+nomethod fn red(ink: int) -> std::byte::Byte errors std::byte::AboveRange, std::byte::BelowRange:
+    std::byte::from_int(channel(div(ink, 65536)))
+
+nomethod fn green(ink: int) -> std::byte::Byte errors std::byte::AboveRange, std::byte::BelowRange:
+    std::byte::from_int(channel(bit_and(div(ink, 256), 255)))
+
+nomethod fn pixel(ink: int) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
+    [red(ink), green(ink), blue(ink), std::byte::from_int(255)]
+
+# A colour with each channel halved: a tile that should be lit but is not.
+nomethod fn dim(ink: int) -> int:
+    div(ink, 65536) * 65536 + bit_and(div(ink, 2048), 60) * 256 + bit_and(div(ink, 8), 60)
+
+# --- What a tile shows -----------------------------------------------------
+nomethod fn terrain_ink(city: simcity::city::City, x: int, y: int) -> int:
+    ground = simcity::city::terrain(city, x, y)
+    if ground == simcity::city::WATER:
+        WATER_INK
+    elif ground == simcity::city::TREES:
+        TREES_INK
+    elif ground == simcity::city::ROUGH:
+        ROUGH_INK
+    else:
+        GRASS_INK
+
+nomethod fn ground(city: simcity::city::City, x: int, y: int) -> int:
+    kind = simcity::city::zone_at(city, x, y)
+    if simcity::city::road_at(city, x, y) != 0:
+        ROAD_INK
+    elif simcity::city::rail_at(city, x, y) != 0:
+        RAIL_INK
+    elif simcity::city::wire_at(city, x, y) != 0:
+        if simcity::city::powered_at(city, x, y) != 0:
+            WIRE_LIVE
+        else:
+            WIRE_INK
+    elif kind == simcity::city::NONE:
+        terrain_ink(city, x, y)
+    elif kind == simcity::city::COAL:
+        COAL_INK
+    elif kind == simcity::city::NUCLEAR:
+        NUCLEAR_INK
+    elif kind == simcity::city::POLICE:
+        POLICE_INK
+    elif kind == simcity::city::FIRE:
+        FIRE_INK
+    elif kind == simcity::city::PARK:
+        PARK_INK
+    else:
+        zone_ink(kind, simcity::city::level_at(city, x, y))
+
+nomethod fn core_ink(city: simcity::city::City, x: int, y: int) -> int:
+    kind = simcity::city::zone_at(city, x, y)
+    if kind == simcity::city::RES:
+        176 * 65536 + 232 * 256 + 164
+    elif kind == simcity::city::COM:
+        176 * 65536 + 208 * 256 + 240
+    elif kind == simcity::city::IND:
+        214 * 65536 + 214 * 256 + 230
+    elif kind == simcity::city::COAL:
+        168 * 65536 + 140 * 256 + 124
+    elif kind == simcity::city::NUCLEAR:
+        238 * 65536 + 238 * 256 + 168
+    elif kind == simcity::city::POLICE:
+        136 * 65536 + 156 * 256 + 236
+    elif kind == simcity::city::FIRE:
+        236 * 65536 + 140 * 256 + 126
+    elif kind == simcity::city::PARK:
+        140 * 65536 + 218 * 256 + 140
+    else:
+        ground(city, x, y)
+
+# --- The frame -------------------------------------------------------------
+# One texture pixel of the tile (X, Y) at pixel row `row` of that tile.
+nomethod fn shade(city: simcity::city::City, x: int, y: int, row: int, col: int, at: int) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
+    ink = ground(city, x, y)
+    lit = if row > 0 and row <= core_rows(city, x, y):
+        core_ink(city, x, y)
+    else:
+        ink
+    if at == simcity::city::pack(x, y):
+        pixel(CURSOR_INK)
+    else:
+        pixel(lit)
+
+# One texture-pixel row of the viewport: `row` is the pixel row within the
+# tile, `ty` the map row it belongs to.
+nomethod fn span(city: simcity::city::City, origin_x: int, ty: int, row: int, across: int, at: int) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
+    pixels = loop px from 0 to TILE * across:
+        tile = div(px, TILE)
+        shade(city, origin_x + tile, ty, row, px.mod(TILE), at)
+    flat(pixels)
+
+# The whole viewport as one list of bytes.
+# The whole viewport as one list of bytes, with the tile AT (or none) marked
+# as the placement preview.
+nomethod fn frame(city: simcity::city::City, origin_x: int, origin_y: int, across: int, down: int, at: int) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
+    rows = loop py from 0 to TILE * down:
+        span(city, origin_x, origin_y + div(py, TILE), py.mod(TILE), across, at)
+    flat(rows)

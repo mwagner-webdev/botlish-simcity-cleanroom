@@ -1,0 +1,938 @@
+# simcity::sim -- the month that happens whether the player is watching or not.
+#
+# One tick (a month of city time) runs, in this order:
+#
+#   1. power, from the plants outwards along the wires;
+#   2. the transport network, inwards from the map's edge, and with it which
+#      zones have somewhere to travel to;
+#   3. the environment: pollution, crime, fire risk and land value;
+#   4. development: each zone block grows or shrinks by what the city is short
+#      of, and its residents and jobs are counted again;
+#   5. the budget: taxes in, upkeep out, and demand written into the bank.
+#
+# Every rule is a plain function over the city's arrays, and every number it
+# uses is a constant named at the top of this file, so a change of balance is
+# one edit and a test states which balance it expects.
+#
+# Four facts of the language shape the code here.
+#
+# First, Botlish has no hoisting, so a callee is written before its caller:
+# the file reads helpers-then-month, not month-then-helpers.
+#
+# Second, a `place` parameter is the caller's own value, so a per-tile pass
+# both reads and writes through ONE place (`place city`). Reading prosperity
+# through a value while writing through a place leaves the two out of step,
+# which is exactly how a network fails to spread; and an array reached through
+# an ordinary parameter is that function's own copy, so a write into it would
+# be lost.
+#
+# Third, there is no integer division, so the one division a loop over a map
+# needs (a tile index into a row and a column) is written out as thirty-two
+# restoring steps -- exactly, and for any map width.
+#
+# Fourth, and the reason the sweeps below run backwards as well as forwards:
+# a propagation taken in one direction over the tile list advances one tile
+# per pass, so a power line forty tiles long would need forty passes. Taken
+# alternately in each direction it converges in a handful, and the pass count
+# is bounded by the map's own extent in case a path is long.
+import std::mutable_array
+import type simcity::city::Tool
+import simcity::city
+
+# --- Balance ---------------------------------------------------------------
+
+# --- Balance ---------------------------------------------------------------
+COAL_POWER = 900
+
+NUCLEAR_POWER = 1800
+
+IND_SMOKE = 1
+
+TREE_FILTER = 2
+
+POLLUTION_DECAY = 600
+
+POLLUTION_SCALE = 8192
+
+POLLUTION_SPREAD = 5
+
+CRIME_BASE = 10
+
+CRIME_SMOKE = 12
+
+POLICE_CUT = 260
+
+POLICE_RADIUS = 8
+
+FIRE_BASE = 30
+
+FIRE_CUT = 260
+
+FIRE_RADIUS = 8
+
+GROW_AT = 60
+
+SHRINK_AT = 45
+
+POP_PER_TILE = 28
+
+JOBS_COM_TILE = 22
+
+JOBS_IND_TILE = 18
+
+LEVEL_MAX = 5
+
+PARK_RADIUS = 3
+
+PARK_ADD = 24
+
+TREE_ADD = 8
+
+WATER_RADIUS = 2
+
+WATER_ADD = 14
+
+CENTRE_RADIUS = 24
+
+CENTRE_ADD = 10
+
+SMOKE_VALUE = 60
+
+CRIME_VALUE = 40
+
+TRAFFIC_VALUE = 4
+
+DEMAND_FLOOR = -100
+
+DEMAND_CEILING = 100
+
+DEMAND_BASE = 160
+
+TAX_R_MUL = 6
+
+JOBS_PULL = 20
+
+POP_PULL = 5
+
+COM_CUSTOMERS = 8
+
+IND_TRADE = 4
+
+COM_BIAS = 70
+
+IND_BIAS = 70
+
+SMOKE_PUSH = 30
+
+CRIME_PUSH = 30
+
+LAND_PULL = 12
+
+COAL_UPKEEP = 200
+
+NUCLEAR_UPKEEP = 400
+
+POLICE_UPKEEP = 100
+
+FIRE_UPKEEP = 100
+
+ROAD_UPKEEP = 1
+
+WIRE_UPKEEP = 1
+
+RAIL_UPKEEP = 2
+
+# --- Arithmetic Botlish does not have --------------------------------------
+nomethod fn clamp(v: int, lo: int, hi: int) -> int:
+    if v < lo:
+        lo
+    elif v > hi:
+        hi
+    else:
+        v
+
+nomethod fn distance(dx: int, dy: int) -> int:
+    ax = if dx < 0:
+        -dx
+    else:
+        dx
+    ay = if dy < 0:
+        -dy
+    else:
+        dy
+    if ax > ay:
+        ax
+    else:
+        ay
+
+nomethod fn div_bits(a: int, b: int, rem: int, q: int, bit: int) -> int:
+    if bit < 0:
+        q
+    else:
+        here = shift_left(rem, 1) + bit_and(shift_right(a, bit), 1)
+        fits = here >= b
+        rest = if fits:
+            here - b
+        else:
+            here
+        next_q = if fits:
+            shift_left(q, 1) + 1
+        else:
+            shift_left(q, 1)
+        div_bits(a, b, rest, next_q, bit - 1)
+
+nomethod fn div(a: int, b: int) -> int:
+    if b <= 0:
+        0
+    elif a < 0:
+        -div(-a, b)
+    else:
+        div_bits(a, b, 0, 0, 31)
+
+# A tile index divided by the map's width: a loop over the map has to work for
+# any width, and 32 is only the width the scenarios happen to use.
+nomethod fn divide(a: int, b: int) -> int:
+    div(a, b)
+
+# --- What a month amounts to -----------------------------------------------
+struct Totals:
+    population: int
+    jobs: int
+    upkeep: int
+    demand_r: int
+    demand_c: int
+    demand_i: int
+    income: int
+
+nomethod fn no_totals() -> Totals:
+    Totals {population: 0, jobs: 0, upkeep: 0, demand_r: 0, demand_c: 0, demand_i: 0, income: 0}
+
+# --- Power -----------------------------------------------------------------
+#
+# A power line conducts and so does a plant; power runs out of a plant's block
+# along the wires and dies where the wire stops. A zone block is supplied when
+# one of its own tiles stands beside a live line, and the whole block is then
+# supplied, because it is one set of grounds. A supplied building does not
+# pass anything on: the wire is the network, exactly as in the game being
+# copied, so cutting a line cuts the power behind it.
+nomethod fn supported_block?(city: simcity::city::City, x: int, y: int) -> bool:
+    zone = simcity::city::zone_at(city, x, y)
+    zone >= simcity::city::RES and zone <= simcity::city::PARK
+
+nomethod fn conducts(city: simcity::city::City, x: int, y: int) -> bool:
+    if simcity::city::wire_at(city, x, y) != 0:
+        true
+    else:
+        kind = simcity::city::zone_at(city, x, y)
+        kind == simcity::city::COAL or kind == simcity::city::NUCLEAR
+
+nomethod fn next_to_live(city: simcity::city::City, x: int, y: int) -> bool:
+    left = simcity::city::powered_at(city, x - 1, y) != 0
+    right = simcity::city::powered_at(city, x + 1, y) != 0
+    up = simcity::city::powered_at(city, x, y - 1) != 0
+    down = simcity::city::powered_at(city, x, y + 1) != 0
+    left or right or up or down
+
+nomethod fn neighbours_trees(city: simcity::city::City, x: int, y: int) -> int:
+    left = if simcity::city::terrain(city, x - 1, y) == simcity::city::TREES:
+        TREE_FILTER
+    else:
+        0
+    right = if simcity::city::terrain(city, x + 1, y) == simcity::city::TREES:
+        TREE_FILTER
+    else:
+        0
+    up = if simcity::city::terrain(city, x, y - 1) == simcity::city::TREES:
+        TREE_FILTER
+    else:
+        0
+    down = if simcity::city::terrain(city, x, y + 1) == simcity::city::TREES:
+        TREE_FILTER
+    else:
+        0
+    left + right + up + down
+
+nomethod fn post_open(city: simcity::city::City, kind: int, x: int, y: int) -> bool:
+    simcity::city::zone_at(city, x, y) == kind and simcity::city::level_at(city, x, y) > 0 and simcity::city::powered_at(city, x, y) != 0 and simcity::city::access_at(city, x, y) != 0
+
+# --- Land value ------------------------------------------------------------
+#
+# What the ground is worth: water and trees and parks add, smoke and crime
+# and congestion take away, and the middle of the map is worth more than its
+# corners. The smoke a tile feels is the worst of the three by three around
+# it, so a street beside a works is worth less than one across town.
+nomethod fn near_ring(x: int, y: int, row: int, col: int, r: int, terrain: int, found: int, city: simcity::city::City) -> int:
+    if row > r:
+        return found
+    if col > r:
+        near_ring(x, y, row + 1, -r, r, terrain, found, city)
+    else:
+        add = if simcity::city::terrain(city, x + col, y + row) == terrain:
+            1
+        else:
+            0
+        near_ring(x, y, row, col + 1, r, terrain, found + add, city)
+
+nomethod fn terrain_near(x: int, y: int, r: int, terrain: int, city: simcity::city::City) -> int:
+    near_ring(x, y, -r, -r, r, terrain, 0, city)
+
+nomethod fn kinds_ring(x: int, y: int, row: int, col: int, r: int, kind: int, found: int, city: simcity::city::City) -> int:
+    if row > r:
+        return found
+    if col > r:
+        kinds_ring(x, y, row + 1, -r, r, kind, found, city)
+    else:
+        add = if simcity::city::zone_at(city, x + col, y + row) == kind:
+            1
+        else:
+            0
+        kinds_ring(x, y, row, col + 1, r, kind, found + add, city)
+
+nomethod fn kinds_near(x: int, y: int, r: int, kind: int, city: simcity::city::City) -> int:
+    kinds_ring(x, y, -r, -r, r, kind, 0, city)
+
+nomethod fn local_ring(city: simcity::city::City, field: MutableArray[int], x: int, y: int, row: int, col: int, worst: int) -> int:
+    if row > 1:
+        return worst
+    if col > 1:
+        local_ring(city, field, x, y, row + 1, -1, worst)
+    else:
+        near = simcity::city::read(city, field, x + col, y + row)
+        here = if near > worst:
+            near
+        else:
+            worst
+        local_ring(city, field, x, y, row, col + 1, here)
+
+nomethod fn local_high(city: simcity::city::City, field: MutableArray[int], x: int, y: int) -> int:
+    local_ring(city, field, x, y, -1, -1, 0)
+
+# --- Demand ----------------------------------------------------------------
+#
+# Residential demand is jobs short of people, cut by tax and by what presses
+# on the block rather than by what the whole city is: a residential block
+# beside industry does not want to grow, and one with jobs going begging and
+# clean air does. Commercial demand is customers short of shops; industrial
+# demand is trade short of industry. Each is a number from -100 to 100 the RCI
+# bar shows, and the same number drives growth.
+nomethod fn block_centre?(city: simcity::city::City, x: int, y: int) -> bool:
+    zone = simcity::city::zone_at(city, x, y)
+    zone >= simcity::city::RES and zone <= simcity::city::PARK and simcity::city::anchor_at(city, x, y) == simcity::city::pack(x, y)
+
+nomethod fn upkeep_of(kind: int) -> int:
+    if kind == simcity::city::COAL:
+        COAL_UPKEEP
+    elif kind == simcity::city::NUCLEAR:
+        NUCLEAR_UPKEEP
+    elif kind == simcity::city::POLICE:
+        POLICE_UPKEEP
+    elif kind == simcity::city::FIRE:
+        FIRE_UPKEEP
+    else:
+        0
+
+# The city's total generating capacity: one figure per plant, not per tile.
+nomethod fn capacity(i: int, made: int, city: simcity::city::City) -> int:
+    if i < 0 or i >= city.grid.zone.capacity():
+        return made
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    if block_centre?(city, x, y):
+        kind = simcity::city::zone_at(city, x, y)
+        added = if kind == simcity::city::COAL:
+            COAL_POWER
+        elif kind == simcity::city::NUCLEAR:
+            NUCLEAR_POWER
+        else:
+            0
+        capacity(i + 1, made + added, city)
+    else:
+        capacity(i + 1, made, city)
+
+# What the three by three tiles around the block at (X, Y) do to its demand.
+nomethod fn blocks_demand(city: simcity::city::City, x: int, y: int) -> int:
+    smoke = local_high(city, city.grid.pollution, x, y)
+    crime = local_high(city, city.grid.crime, x, y)
+    worth = local_high(city, city.grid.value, x, y)
+    penalty = div(smoke * SMOKE_PUSH, 100) + div(crime * CRIME_PUSH, 100)
+    div((worth - 64) * LAND_PULL, 100) - penalty
+
+nomethod fn live(x: int, y: int, row: int, col: int, place city: simcity::city::City) -> unit:
+    if row > 1:
+        return unit
+    if col > 1:
+        live(x, y, row + 1, -1, city)
+    else:
+        i = simcity::city::index_of(city, x + col, y + row)
+        if i >= 0 and i < city.grid.powered.capacity():
+            city.grid.powered.set(i, 1)
+        else:
+            unit
+        live(x, y, row, col + 1, city)
+
+# Every tile's powered flag cleared, and a plant's block made live at once:
+# one pass where there was two.
+nomethod fn clears_power(i: int, place city: simcity::city::City) -> unit:
+    if i < 0 or i >= city.grid.powered.capacity():
+        return unit
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    kind = simcity::city::zone_at(city, x, y)
+    if kind == simcity::city::COAL or kind == simcity::city::NUCLEAR:
+        city.grid.powered.set(i, 1)
+        live(x, y, -1, -1, city)
+    else:
+        city.grid.powered.set(i, 0)
+    clears_power(i + 1, city)
+
+nomethod fn carries(x: int, y: int, place city: simcity::city::City) -> bool:
+    if not conducts(city, x, y):
+        false
+    elif simcity::city::powered_at(city, x, y) != 0:
+        false
+    else:
+        if next_to_live(city, x, y):
+            i = simcity::city::index_of(city, x, y)
+            if i >= 0 and i < city.grid.powered.capacity():
+                city.grid.powered.set(i, 1)
+            else:
+                unit
+            true
+        else:
+            false
+
+nomethod fn sweeps_power(i: int, place city: simcity::city::City) -> bool:
+    if i < 0 or i >= city.grid.zone.capacity():
+        return false
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    more = carries(x, y, city)
+    rest = sweeps_power(i + 1, city)
+    more or rest
+
+nomethod fn sweeps_power_back(i: int, place city: simcity::city::City) -> bool:
+    if i < 0:
+        return false
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    more = carries(x, y, city)
+    rest = if i == 0:
+        false
+    else:
+        sweeps_power_back(i - 1, city)
+    more or rest
+
+nomethod fn sweeps_until(place city: simcity::city::City, left: int, forward: bool) -> unit:
+    if left <= 0:
+        return unit
+    last = city.grid.zone.capacity() - 1
+    moved = if forward:
+        sweeps_power(0, city)
+    else:
+        sweeps_power_back(last, city)
+    if moved:
+        sweeps_until(city, left - 1, not forward)
+    else:
+        unit
+
+nomethod fn feeds(x: int, y: int, place city: simcity::city::City) -> bool:
+    if not supported_block?(city, x, y):
+        false
+    elif simcity::city::powered_at(city, x, y) != 0:
+        false
+    else:
+        if next_to_live(city, x, y):
+            mark = simcity::city::anchor_at(city, x, y)
+            if mark >= 0:
+                live(simcity::city::pack_x(mark), simcity::city::pack_y(mark), -1, -1, city)
+            else:
+                unit
+            true
+        else:
+            false
+
+nomethod fn sweeps_zones(i: int, place city: simcity::city::City) -> bool:
+    if i < 0 or i >= city.grid.zone.capacity():
+        return false
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    more = feeds(x, y, city)
+    rest = sweeps_zones(i + 1, city)
+    more or rest
+
+nomethod fn sweeps_zones_back(i: int, place city: simcity::city::City) -> bool:
+    if i < 0:
+        return false
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    more = feeds(x, y, city)
+    rest = if i == 0:
+        false
+    else:
+        sweeps_zones_back(i - 1, city)
+    more or rest
+
+nomethod fn feeds_until(place city: simcity::city::City, left: int, forward: bool) -> unit:
+    if left <= 0:
+        return unit
+    last = city.grid.zone.capacity() - 1
+    moved = if forward:
+        sweeps_zones(0, city)
+    else:
+        sweeps_zones_back(last, city)
+    if moved:
+        feeds_until(city, left - 1, not forward)
+    else:
+        unit
+
+nomethod fn spread_power(place city: simcity::city::City) -> unit:
+    clears_power(0, city)
+    sweeps_until(city, city.width + city.height, true)
+    feeds_until(city, city.width + city.height, true)
+
+# --- Transport -------------------------------------------------------------
+#
+# The network is the roads and the rails, and it is only connected where it
+# reaches the edge of the map: a ring of roads with no way out of the county
+# serves nobody. A zone block is served when a tile of it stands beside the
+# connected network, and a served block serves the rest of itself.
+nomethod fn serves_block(x: int, y: int, row: int, col: int, place city: simcity::city::City) -> unit:
+    if row > 1:
+        return unit
+    if col > 1:
+        serves_block(x, y, row + 1, -1, city)
+    else:
+        i = simcity::city::index_of(city, x + col, y + row)
+        if i >= 0 and i < city.grid.access.capacity():
+            city.grid.access.set(i, 1)
+        else:
+            unit
+        serves_block(x, y, row, col + 1, city)
+
+nomethod fn reaches(x: int, y: int, place city: simcity::city::City) -> bool:
+    on_network = simcity::city::road_at(city, x, y) != 0 or simcity::city::rail_at(city, x, y) != 0 or simcity::city::zone_at(city, x, y) != simcity::city::NONE
+    if not on_network:
+        false
+    elif simcity::city::access_at(city, x, y) != 0:
+        false
+    else:
+        served = simcity::city::access_at(city, x - 1, y) != 0 or simcity::city::access_at(city, x + 1, y) != 0 or simcity::city::access_at(city, x, y - 1) != 0 or simcity::city::access_at(city, x, y + 1) != 0
+        if served:
+            if simcity::city::zone_at(city, x, y) == simcity::city::NONE:
+                i = simcity::city::index_of(city, x, y)
+                if i >= 0 and i < city.grid.access.capacity():
+                    city.grid.access.set(i, 1)
+                else:
+                    unit
+            else:
+                serves_block(x, y, -1, -1, city)
+            true
+        else:
+            false
+
+nomethod fn sweeps_road(i: int, place city: simcity::city::City) -> bool:
+    if i < 0 or i >= city.grid.road.capacity():
+        return false
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    more = reaches(x, y, city)
+    rest = sweeps_road(i + 1, city)
+    more or rest
+
+nomethod fn sweeps_road_back(i: int, place city: simcity::city::City) -> bool:
+    if i < 0:
+        return false
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    more = reaches(x, y, city)
+    rest = if i == 0:
+        false
+    else:
+        sweeps_road_back(i - 1, city)
+    more or rest
+
+# Every tile's served flag cleared, and the border's roads and rails made the
+# network's roots at once: one pass where there was two.
+nomethod fn clears_access(i: int, place city: simcity::city::City) -> unit:
+    if i < 0 or i >= city.grid.access.capacity():
+        return unit
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    border = x == 0 or y == 0 or x == city.width - 1 or y == city.height - 1
+    road_here = simcity::city::road_at(city, x, y) != 0 or simcity::city::rail_at(city, x, y) != 0
+    if border and road_here:
+        city.grid.access.set(i, 1)
+    else:
+        city.grid.access.set(i, 0)
+    clears_access(i + 1, city)
+
+nomethod fn sweeps_send(place city: simcity::city::City, left: int, forward: bool) -> unit:
+    if left <= 0:
+        return unit
+    last = city.grid.road.capacity() - 1
+    moved = if forward:
+        sweeps_road(0, city)
+    else:
+        sweeps_road_back(last, city)
+    if moved:
+        sweeps_send(city, left - 1, not forward)
+    else:
+        unit
+
+nomethod fn spread_road(place city: simcity::city::City) -> unit:
+    clears_access(0, city)
+    sweeps_send(city, city.width + city.height, true)
+
+# --- Polluting -------------------------------------------------------------
+#
+# Industry makes smoke, trees take it out of the air, and what is left drifts
+# to its neighbours and decays. The drift is a relaxation over the four
+# neighbours, so smoke spreads at most a tile or two a month and the ground
+# under a works is visibly dirtier than the ground across town.
+nomethod fn adds_pollution(x: int, y: int, n: int, place city: simcity::city::City) -> unit:
+    i = simcity::city::index_of(city, x, y)
+    if i < 0 or i >= city.grid.pollution.capacity():
+        return unit
+    now = std::mutable_array::at(city.grid.pollution, i)
+    city.grid.pollution.set(i, clamp(now + n, 0, 255))
+
+nomethod fn makes_smoke(i: int, place city: simcity::city::City) -> unit:
+    if i < 0 or i >= city.grid.zone.capacity():
+        return unit
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    level = simcity::city::level_at(city, x, y)
+    if simcity::city::zone_at(city, x, y) == simcity::city::IND and level > 0:
+        adds_pollution(x, y, level * IND_SMOKE, city)
+    else:
+        unit
+    makes_smoke(i + 1, city)
+
+nomethod fn filters_air(i: int, place city: simcity::city::City) -> unit:
+    if i < 0 or i >= city.grid.pollution.capacity():
+        return unit
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    near = neighbours_trees(city, x, y)
+    here = std::mutable_array::at(city.grid.pollution, i)
+    city.grid.pollution.set(i, clamp(here - near, 0, 255))
+    filters_air(i + 1, city)
+
+nomethod fn drifts(i: int, place city: simcity::city::City) -> unit:
+    if i < 0 or i >= city.grid.pollution.capacity():
+        return unit
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    here = std::mutable_array::at(city.grid.pollution, i)
+    around = simcity::city::pollution_at(city, x - 1, y) + simcity::city::pollution_at(city, x + 1, y) + simcity::city::pollution_at(city, x, y - 1) + simcity::city::pollution_at(city, x, y + 1)
+    kept = here * (POLLUTION_SCALE - POLLUTION_DECAY)
+    moved = kept + shift_right((around * POLLUTION_SCALE - kept), POLLUTION_SPREAD)
+    city.grid.pollution.set(i, clamp(shift_right(moved, 13), 0, 255))
+    drifts(i + 1, city)
+
+nomethod fn spoils(place city: simcity::city::City) -> unit:
+    makes_smoke(0, city)
+    filters_air(0, city)
+    drifts(0, city)
+
+# --- Crime and fire --------------------------------------------------------
+#
+# A developed block carries crime in proportion to its level, industry
+# carries fire risk, and the posts that fight them work only where they are
+# developed, powered and connected. Their effect is a subtraction inside
+# their radius, applied where they stand rather than searched for by every
+# tile.
+nomethod fn subs_pollution(x: int, y: int, row: int, col: int, field: MutableArray[int], amount: int, place city: simcity::city::City) -> unit:
+    if row > FIRE_RADIUS:
+        return unit
+    if col > FIRE_RADIUS:
+        subs_pollution(x, y, row + 1, -FIRE_RADIUS, field, amount, city)
+    else:
+        i = simcity::city::index_of(city, x + col, y + row)
+        if i >= 0 and i < field.capacity():
+            now = std::mutable_array::at(field, i)
+            field.set(i, clamp(now - amount, 0, 255))
+        else:
+            unit
+        subs_pollution(x, y, row, col + 1, field, amount, city)
+
+nomethod fn wants_crime(i: int, place city: simcity::city::City) -> unit:
+    if i < 0 or i >= city.grid.crime.capacity():
+        return unit
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    smoke = shift_right(simcity::city::pollution_at(city, x, y) * CRIME_SMOKE, 8)
+    level = simcity::city::level_at(city, x, y)
+    busy = if level > 0:
+        CRIME_BASE * level
+    else:
+        0
+    city.grid.crime.set(i, clamp(busy + smoke, 0, 255))
+    wants_crime(i + 1, city)
+
+nomethod fn wants_fire(i: int, place city: simcity::city::City) -> unit:
+    if i < 0 or i >= city.grid.fire.capacity():
+        return unit
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    level = simcity::city::level_at(city, x, y)
+    hot = if simcity::city::zone_at(city, x, y) == simcity::city::IND and level > 0:
+        FIRE_BASE * level
+    else:
+        0
+    city.grid.fire.set(i, clamp(hot, 0, 255))
+    wants_fire(i + 1, city)
+
+nomethod fn police_works(i: int, place city: simcity::city::City) -> unit:
+    if i < 0 or i >= city.grid.zone.capacity():
+        return unit
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    if post_open(city, simcity::city::POLICE, x, y):
+        subs_pollution(x, y, -POLICE_RADIUS, -POLICE_RADIUS, city.grid.crime, POLICE_CUT, city)
+    else:
+        unit
+    police_works(i + 1, city)
+
+nomethod fn fire_works(i: int, place city: simcity::city::City) -> unit:
+    if i < 0 or i >= city.grid.zone.capacity():
+        return unit
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    if post_open(city, simcity::city::FIRE, x, y):
+        subs_pollution(x, y, -FIRE_RADIUS, -FIRE_RADIUS, city.grid.fire, FIRE_CUT, city)
+    else:
+        unit
+    fire_works(i + 1, city)
+
+nomethod fn protects(place city: simcity::city::City) -> unit:
+    wants_crime(0, city)
+    wants_fire(0, city)
+    police_works(0, city)
+    fire_works(0, city)
+
+nomethod fn values(i: int, place city: simcity::city::City) -> unit:
+    if i < 0 or i >= city.grid.value.capacity():
+        return unit
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    ground = simcity::city::terrain(city, x, y)
+    pretty = if ground == simcity::city::TREES:
+        TREE_ADD
+    elif ground == simcity::city::WATER:
+        WATER_ADD * 2
+    else:
+        0
+    water = terrain_near(x, y, WATER_RADIUS, simcity::city::WATER, city)
+    parks = kinds_near(x, y, PARK_RADIUS, simcity::city::PARK, city)
+    smoke = div(local_high(city, city.grid.pollution, x, y) * SMOKE_VALUE, 256)
+    crime = div(simcity::city::crime_at(city, x, y) * CRIME_VALUE, 256)
+    here = simcity::city::level_at(city, x, y)
+    busy = if here > 0:
+        shift_right((simcity::city::pop_at(city, x, y) + simcity::city::jobs_at(city, x, y)) * TRAFFIC_VALUE, 12)
+    else:
+        0
+    middle = distance(x - shift_right(city.width, 1), y - shift_right(city.height, 1))
+    centre = if middle < CENTRE_RADIUS:
+        CENTRE_ADD * (CENTRE_RADIUS - middle)
+    else:
+        0
+    worth = 32 + pretty + shift_right(water * WATER_ADD, 3) + shift_right(parks * PARK_ADD, 2) + shift_right(centre, 3) + shift_right(simcity::city::value_at(city, x, y) + 32, 1) - smoke - crime - busy
+    city.grid.value.set(i, clamp(worth, 0, 255))
+    values(i + 1, city)
+
+nomethod fn prices(place city: simcity::city::City) -> unit:
+    values(0, city)
+
+# Residents, jobs and upkeep in one pass over the map: three scans cost three
+# times the calls, and each of the three is one figure.
+nomethod fn tally(city: simcity::city::City, i: int, pop: int, jobs: int, upkeep: int) -> Totals:
+    if i < 0 or i >= city.grid.zone.capacity():
+        Totals {population: pop, jobs: jobs, upkeep: upkeep, demand_r: 0, demand_c: 0, demand_i: 0, income: 0}
+    else:
+        x = i.mod(city.width)
+        y = divide(i, city.width)
+        road = simcity::city::road_at(city, x, y)
+        wire = simcity::city::wire_at(city, x, y)
+        rail = simcity::city::rail_at(city, x, y)
+        zone = simcity::city::zone_at(city, x, y)
+        here = simcity::city::anchor_at(city, x, y)
+        up = if zone >= simcity::city::RES and zone <= simcity::city::PARK and here == simcity::city::pack(x, y):
+            upkeep + upkeep_of(zone)
+        elif road != 0:
+            upkeep + ROAD_UPKEEP
+        elif wire != 0:
+            upkeep + WIRE_UPKEEP
+        elif rail != 0:
+            upkeep + RAIL_UPKEEP
+        else:
+            upkeep
+        tally(city, i + 1, pop + simcity::city::pop_at(city, x, y), jobs + simcity::city::jobs_at(city, x, y), up)
+
+nomethod fn accounts(city: simcity::city::City) -> Totals:
+    tally(city, 0, 0, 0, 0)
+
+# Residents, straight off the tiles: the bank's count is a month old.
+nomethod fn residents(city: simcity::city::City) -> int:
+    tally(city, 0, 0, 0, 0).population
+
+nomethod fn demand(city: simcity::city::City) -> Totals:
+    count = accounts(city)
+    pop = count.population
+    jobs = count.jobs
+    upkeep = count.upkeep
+    tax = simcity::city::tax_rate(city)
+    housed = if pop > 4000:
+        4000
+    else:
+        pop
+    going = if jobs > 5000:
+        5000
+    else:
+        jobs
+    living = if pop > 5000:
+        5000
+    else:
+        pop
+    pull_r = DEMAND_BASE + div(going * JOBS_PULL, 100) - div(housed * POP_PULL, 100)
+    pull_c = DEMAND_BASE + div(living * COM_CUSTOMERS, 100) - COM_BIAS
+    pull_i = DEMAND_BASE + div((going + living) * IND_TRADE, 100) - IND_BIAS
+    cut = 100 - tax * TAX_R_MUL
+    want_r = clamp(div(pull_r * cut, 100), DEMAND_FLOOR, DEMAND_CEILING)
+    want_c = clamp(div(pull_c * cut, 100), DEMAND_FLOOR, DEMAND_CEILING)
+    want_i = clamp(div(pull_i * cut, 100), DEMAND_FLOOR, DEMAND_CEILING)
+    earned = div(pop * tax, 10)
+    Totals {population: pop, jobs: jobs, upkeep: upkeep, demand_r: want_r, demand_c: want_c, demand_i: want_i, income: earned}
+
+# --- Development -----------------------------------------------------------
+#
+# A zone block grows a level when the city is short of what it is, and when it
+# has power and somewhere to go; it shrinks back when it has neither. What it
+# holds once it has grown -- residents or jobs -- is counted from its level,
+# so population and employment follow the map rather than the clock.
+nomethod fn levels(x: int, y: int, level: int, row: int, col: int, place city: simcity::city::City) -> unit:
+    if row > 1:
+        return unit
+    if col > 1:
+        levels(x, y, level, row + 1, -1, city)
+    else:
+        tx = x + col
+        ty = y + row
+        i = simcity::city::index_of(city, tx, ty)
+        if i >= 0 and i < city.grid.level.capacity():
+            zone = simcity::city::zone_at(city, tx, ty)
+            city.grid.level.set(i, level)
+            residents = if zone == simcity::city::RES:
+                level * POP_PER_TILE
+            else:
+                0
+            work = if zone == simcity::city::COM:
+                level * JOBS_COM_TILE
+            elif zone == simcity::city::IND:
+                level * JOBS_IND_TILE
+            else:
+                0
+            if i < city.grid.pop.capacity():
+                city.grid.pop.set(i, residents)
+            else:
+                unit
+            if i < city.grid.jobs.capacity():
+                city.grid.jobs.set(i, work)
+            else:
+                unit
+        else:
+            unit
+        levels(x, y, level, row, col + 1, city)
+
+nomethod fn grows(kind: int, x: int, y: int, market: Totals, place city: simcity::city::City) -> unit:
+    here = simcity::city::index_of(city, x, y)
+    if here < 0 or here >= city.grid.level.capacity():
+        return unit
+    level = std::mutable_array::at(city.grid.level, here)
+    base = if kind == simcity::city::RES:
+        market.demand_r
+    elif kind == simcity::city::COM:
+        market.demand_c
+    else:
+        market.demand_i
+    want = base + blocks_demand(city, x, y)
+    ready = simcity::city::powered_at(city, x, y) != 0 and simcity::city::access_at(city, x, y) != 0 and simcity::city::funds(city) >= 0
+    next = if not ready:
+        if level > 0:
+            level - 1
+        else:
+            0
+    elif want > 0:
+        if want >= GROW_AT:
+            level + 1
+        else:
+            level
+    elif want < 0:
+        if -want >= SHRINK_AT:
+            if level > 0:
+                level - 1
+            else:
+                0
+        else:
+            level
+    else:
+        level
+    levels(x, y, clamp(next, 0, LEVEL_MAX), -1, -1, city)
+
+nomethod fn grows_all(i: int, market: Totals, place city: simcity::city::City) -> unit:
+    if i < 0 or i >= city.grid.zone.capacity():
+        return unit
+    x = i.mod(city.width)
+    y = divide(i, city.width)
+    kind = simcity::city::zone_at(city, x, y)
+    if block_centre?(city, x, y):
+        grows(kind, x, y, market, city)
+    else:
+        unit
+    grows_all(i + 1, market, city)
+
+nomethod fn develops(place city: simcity::city::City, market: Totals) -> unit:
+    grows_all(0, market, city)
+
+# --- The systems, and the month --------------------------------------------
+#
+# The environment runs every third month: smoke, crime and land value are slow
+# quantities next to power, road access and growth, and the whole turn of the
+# systems is what keeps a month well under a tenth of a second.
+nomethod fn runs(place city: simcity::city::City) -> Totals:
+    spread_power(city)
+    spread_road(city)
+    settles = simcity::city::ticks(city).mod(3)
+    if settles == 0:
+        spoils(city)
+        protects(city)
+        prices(city)
+    else:
+        unit
+    market = demand(city)
+    develops(city, market)
+    market
+
+# Months into years, for the date on the status line.
+nomethod fn months_years(month: int) -> int:
+    div(month, 12)
+
+nomethod fn tick(city: simcity::city::City) -> simcity::city::City:
+    totals = runs(city)
+    month = simcity::city::month(city) + 1
+    earned = div(totals.income, simcity::city::MONTHS)
+    spent = div(totals.upkeep, simcity::city::MONTHS)
+    kept = simcity::city::funds(city) + earned - spent
+    next_month = if month >= simcity::city::MONTHS:
+        0
+    else:
+        month
+    booked = simcity::city::with_two(city, simcity::city::FUNDS, kept, simcity::city::MONTH, next_month)
+    counted = simcity::city::with_two(booked, simcity::city::TICK, simcity::city::ticks(city) + 1, simcity::city::POPULATION, totals.population)
+    wanted = simcity::city::with_two(counted, simcity::city::DEMAND_R, totals.demand_r, simcity::city::DEMAND_C, totals.demand_c)
+    asking = simcity::city::with_two(wanted, simcity::city::DEMAND_I, totals.demand_i, simcity::city::JOBS, totals.jobs)
+    settled = if month >= simcity::city::MONTHS:
+        simcity::city::with_two(asking, simcity::city::INCOME, totals.income, simcity::city::UPKEEP, totals.upkeep)
+    else:
+        simcity::city::with_two(asking, simcity::city::INCOME, simcity::city::income_year(asking) + earned, simcity::city::UPKEEP, simcity::city::upkeep_year(asking) + spent)
+    simcity::city::with_two(settled, simcity::city::BALANCE, simcity::city::income_year(settled) - simcity::city::upkeep_year(settled), simcity::city::MONTH, simcity::city::month(settled))

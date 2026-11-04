@@ -1,0 +1,28 @@
+# simcity.bot -- the entry point.
+#
+#   ./botlish-linux-x86_64 -backend cranelift simcity.bot
+#
+# builds and runs the game. A headless run of the same simulation, for the
+# tests and the benchmark, is tests.bot and bench.bot.
+import raven
+import std::str
+import simcity::app
+import simcity::city
+import simcity::screen
+
+with context raven::create()
+with context simcity::screen::create()
+
+fn main() -> str:
+    town = simcity::city::make(48, 48, 4242, 20000)
+    ended = simcity::app::start(town, raven::desktop()):
+        on NonFiniteFloat:
+            "a figure Raven reported is not a number"
+    ended
+
+result = main():
+    on simcity::screen::OutOfRange:
+        "no memory for the map"
+    on IndexNotFound:
+        "no state"
+result

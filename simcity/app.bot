@@ -1,0 +1,540 @@
+# simcity::app -- the game's window, its controls, and the loop that runs both.
+#
+# This module is where the simulation meets Raven. It holds the city (a value
+# the simulation owns), reads what the mouse does as construction, and copies
+# the city's figures onto the controls. It contains no simulation rules of its
+# own: every number it shows comes out of simcity::sim, and every change it
+# makes goes in through simcity::actions.
+#
+# The loop is a recursion of a function over its own state, which the native
+# backends run as a loop: one frame, its events, one month of city time when
+# the clock says so, and the next frame. A timer ticks every tenth of a second
+# and its events are what wake the loop, so the city advances whether the
+# player is clicking or not.
+#
+# The game's mutable state is one struct held in a one-slot MutableArray,
+# because Botlish structs have no field assignment: a change is a new struct
+# and a write into the array. That is the price of immutable records here, paid
+# once in `put` and the `State` literals rather than spread over the program.
+import std::abi::bytes
+import std::ffi::c
+import std::float64
+import std::int
+import std::list
+import std::mutable_array
+import std::str
+import type simcity::city::Tool
+import raven
+import raven::controls
+import raven::widget
+import raven::window
+import simcity::actions
+import simcity::city
+import simcity::render
+import simcity::screen
+import simcity::sim
+import simcity::toolbar
+import simcity::words
+
+# --- The shape of the game -------------------------------------------------
+
+# Map tiles the viewport shows, and screen pixels per map tile.
+ACROSS = 26
+DOWN = 19
+TILE_PX = 16
+
+# How fast the city runs: a choice of simulated month per timer tick. A tick
+# of the timer is a tenth of a second, so "month" is a month every half a
+# second and "rush" is ten a second.
+enum Speed:
+    Paused,
+    Month,
+    Rush
+
+# The mutable part of the game: the city and where the player stands.
+struct State:
+    city: simcity::city::City
+    tool: simcity::city::Tool
+    speed: Speed
+    origin_x: int
+    origin_y: int
+    cursor_x: int
+    cursor_y: int
+    held: bool
+    ticks: int
+    message: str
+    redraw: bool
+
+# Everything the game holds: its state, and the widgets that show it.
+struct Game:
+    state: MutableArray[State]
+    window: raven::Window
+    map: raven::Widget
+    funds: raven::Widget
+    people: raven::Widget
+    jobs: raven::Widget
+    date: raven::Widget
+    tempo: raven::Widget
+    want_r: raven::Widget
+    want_c: raven::Widget
+    want_i: raven::Widget
+    note: raven::Widget
+    tax: raven::Widget
+    clock: raven::Timer
+
+# --- Small helpers ---------------------------------------------------------
+
+nomethod fn whole(value: Float64) -> int:
+    if value < 0.0:
+        0
+    else:
+        std::float64::truncate(value)
+
+nomethod fn speed_label(speed: Speed) -> str:
+    if speed == Speed::Paused:
+        "Tempo: paused"
+    elif speed == Speed::Month:
+        "Tempo: month"
+    else:
+        "Tempo: rush"
+
+nomethod fn screen_width() -> Float64:
+    std::float64::from_int(TILE_PX * ACROSS)
+
+nomethod fn screen_height() -> Float64:
+    std::float64::from_int(TILE_PX * DOWN)
+
+# Simulated months per timer tick.
+nomethod fn speed_rate(speed: Speed) -> int:
+    if speed == Speed::Paused:
+        0
+    elif speed == Speed::Month:
+        5
+    else:
+        1
+
+nomethod fn rate_of(value: Float64) -> int:
+    if value < 0.0:
+        0
+    elif value > 20.0:
+        20
+    else:
+        std::float64::truncate(value)
+
+# --- A state, and changing one part of it ----------------------------------
+
+nomethod fn no_state() -> State:
+    State {
+        city: simcity::city::make(8, 8, 1, 0),
+        tool: simcity::city::Tool::None,
+        speed: Speed::Month,
+        origin_x: 0,
+        origin_y: 0,
+        cursor_x: -1,
+        cursor_y: -1,
+        held: false,
+        ticks: 0,
+        message: "nothing here",
+        redraw: false
+    }
+
+nomethod fn state(game: Game) -> State:
+    if 0 < game.state.capacity():
+        std::mutable_array::at(game.state, 0)
+    else:
+        no_state()
+
+# Writes S into the caller's own state, in place.
+nomethod fn put(place game: Game, s: State) -> unit:
+    if 0 < game.state.capacity():
+        game.state.set(0, s)
+    else:
+        unit
+
+nomethod fn with_city(game: Game, city: simcity::city::City) -> Game:
+    s = state(game)
+    put(game, State {
+        city: city,
+        tool: s.tool,
+        speed: s.speed,
+        origin_x: s.origin_x,
+        origin_y: s.origin_y,
+        cursor_x: s.cursor_x,
+        cursor_y: s.cursor_y,
+        held: s.held,
+        ticks: s.ticks,
+        message: s.message,
+        redraw: true
+    })
+    game
+
+nomethod fn with_message(game: Game, text: str) -> Game:
+    s = state(game)
+    put(game, State {
+        city: s.city,
+        tool: s.tool,
+        speed: s.speed,
+        origin_x: s.origin_x,
+        origin_y: s.origin_y,
+        cursor_x: s.cursor_x,
+        cursor_y: s.cursor_y,
+        held: s.held,
+        ticks: s.ticks,
+        message: text,
+        redraw: true
+    })
+    game
+
+nomethod fn with_tool(game: Game, tool: Tool) -> Game:
+    s = state(game)
+    put(game, State {
+        city: s.city,
+        tool: tool,
+        speed: s.speed,
+        origin_x: s.origin_x,
+        origin_y: s.origin_y,
+        cursor_x: s.cursor_x,
+        cursor_y: s.cursor_y,
+        held: s.held,
+        ticks: s.ticks,
+        message: simcity::words::show_tool(tool).concat(", ").concat(simcity::words::show_cost(tool)),
+        redraw: true
+    })
+    game
+
+nomethod fn with_speed(game: Game, speed: Speed) -> Game:
+    s = state(game)
+    put(game, State {
+        city: s.city,
+        tool: s.tool,
+        speed: speed,
+        origin_x: s.origin_x,
+        origin_y: s.origin_y,
+        cursor_x: s.cursor_x,
+        cursor_y: s.cursor_y,
+        held: s.held,
+        ticks: s.ticks,
+        message: speed_label(speed),
+        redraw: true
+    })
+    game
+
+nomethod fn with_view(game: Game, origin_x: int, origin_y: int) -> Game:
+    s = state(game)
+    put(game, State {
+        city: s.city,
+        tool: s.tool,
+        speed: s.speed,
+        origin_x: origin_x,
+        origin_y: origin_y,
+        cursor_x: s.cursor_x,
+        cursor_y: s.cursor_y,
+        held: s.held,
+        ticks: s.ticks,
+        message: s.message,
+        redraw: true
+    })
+    game
+
+# The pointer's tile, and whether it moved: the preview follows it, and a
+# frame is redrawn when it lands on a new tile.
+nomethod fn with_cursor(game: Game, cursor_x: int, cursor_y: int, held: bool) -> Game:
+    s = state(game)
+    same = cursor_x == s.cursor_x and cursor_y == s.cursor_y and held == s.held
+    put(game, State {
+        city: s.city,
+        tool: s.tool,
+        speed: s.speed,
+        origin_x: s.origin_x,
+        origin_y: s.origin_y,
+        cursor_x: cursor_x,
+        cursor_y: cursor_y,
+        held: held,
+        ticks: s.ticks,
+        message: s.message,
+        redraw: s.redraw or not same
+    })
+    game
+
+# --- The window ------------------------------------------------------------
+
+nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
+    window = raven::window("SimCity", 940, 640)
+    funds = raven::label(simcity::words::show_funds(city))
+    people = raven::label(simcity::words::show_people(city))
+    jobs = raven::label(simcity::words::show_jobs(city))
+    date = raven::label(simcity::words::show_date(city))
+    tempo = raven::label(speed_label(Speed::Month))
+    want_r = raven::label(simcity::words::show_demand(city, 0))
+    want_c = raven::label(simcity::words::show_demand(city, 1))
+    want_i = raven::label(simcity::words::show_demand(city, 2))
+    note = raven::label("Build something.")
+    tax = raven::spin_box(0.0, 20.0)
+    raven::set_spin_box_value(tax, std::float64::from_int(simcity::city::tax_rate(city)))
+    top = raven::hbox().add(funds).add(people).add(jobs).add(date).add(tempo)
+    demand = raven::hbox().add(want_r).add(want_c).add(want_i)
+    map = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_IMAGE)}
+    raven::widget::Rwidget_set_size(map.id, screen_width(), screen_height())
+    sides = simcity::toolbar::column()
+    body = raven::hbox().add(map).add(sides)
+    lower = raven::hbox().add(note).add(tax)
+    column = raven::vbox().add(top).add(demand).add(body).add(lower)
+    raven::set_content(window, column)
+    started = State {
+        city: city,
+        tool: simcity::city::Tool::None,
+        speed: Speed::Month,
+        origin_x: 0,
+        origin_y: 0,
+        cursor_x: -1,
+        cursor_y: -1,
+        held: false,
+        ticks: 0,
+        message: "Build something.",
+        redraw: true
+    }
+    Game {
+        state: std::mutable_array::create(1, started),
+        clock: raven::timer(0.1, true),
+        window: window,
+        map: map,
+        funds: funds,
+        people: people,
+        jobs: jobs,
+        date: date,
+        tempo: tempo,
+        want_r: want_r,
+        want_c: want_c,
+        want_i: want_i,
+        note: note,
+        tax: tax
+    }
+
+nomethod fn clear(game: Game) -> Game:
+    s = state(game)
+    put(game, State {
+        city: s.city,
+        tool: s.tool,
+        speed: s.speed,
+        origin_x: s.origin_x,
+        origin_y: s.origin_y,
+        cursor_x: s.cursor_x,
+        cursor_y: s.cursor_y,
+        held: s.held,
+        ticks: s.ticks,
+        message: s.message,
+        redraw: false
+    })
+    game
+
+# --- Showing the game ------------------------------------------------------
+
+# The map's texture: made when the city or the cursor changes, and nothing
+# uploaded while the pointer only moves between two tiles.
+nomethod fn map_file(game: Game) -> Game:
+    s = state(game)
+    if not s.redraw:
+        game
+    else:
+        at = simcity::city::pack(s.cursor_x, s.cursor_y)
+        pixels = simcity::render::frame(s.city, s.origin_x, s.origin_y, ACROSS, DOWN, at)
+        wide = simcity::render::TILE * ACROSS
+        tall = simcity::render::TILE * DOWN
+        opened = simcity::screen::open(wide, tall):
+            on simcity::screen::OutOfRange:
+                unit
+        fresh = simcity::screen::texture_of(std::abi::bytes::from_list(pixels), wide, tall):
+            on IndexNotFound:
+                simcity::screen::none_texture()
+            on simcity::screen::OutOfRange:
+                simcity::screen::none_texture()
+        raven::controls::Rimage_set_texture(game.map.id, fresh)
+        clear(game)
+
+nomethod fn show(game: Game) -> Game:
+    s = state(game)
+    raven::set_text(game.funds, simcity::words::show_funds(s.city))
+    raven::set_text(game.people, simcity::words::show_people(s.city))
+    raven::set_text(game.jobs, simcity::words::show_jobs(s.city))
+    raven::set_text(game.date, simcity::words::show_date(s.city))
+    raven::set_text(game.tempo, speed_label(s.speed))
+    raven::set_text(game.want_r, simcity::words::show_demand(s.city, 0))
+    raven::set_text(game.want_c, simcity::words::show_demand(s.city, 1))
+    raven::set_text(game.want_i, simcity::words::show_demand(s.city, 2))
+    raven::set_text(game.note, s.message)
+    map_file(game)
+
+# --- The mouse -------------------------------------------------------------
+#
+# Raven reports control input through the package's event bridge, but the
+# bridge watches named widget kinds only: nothing watches the map, which is a
+# texture. So the map's mouse is read by polling the window, which is what a
+# game does anyway: the pointer's position and the button's state, then the
+# tile under it.
+
+nomethod fn tile_under(game: Game) -> simcity::screen::Place errors NonFiniteFloat:
+    laid_out = raven::rect(game.map):
+        on NonFiniteFloat:
+            raven::Rect {x: 0.0, y: 0.0, width: 0.0, height: 0.0}
+    where = simcity::screen::mouse_at(game.window):
+        on NonFiniteFloat:
+            [0.0, 0.0]
+        on NativeViewNull:
+            [0.0, 0.0]
+        on IndexNotFound:
+            [0.0, 0.0]
+        on simcity::screen::OutOfRange:
+            [0.0, 0.0]
+    x = std::list::get(where, 0, 0.0) - laid_out.x
+    y = std::list::get(where, 1, 0.0) - laid_out.y
+    s = state(game)
+    tile = simcity::render::div(whole(x), TILE_PX):
+        on NonFiniteFloat:
+            0
+    row = simcity::render::div(whole(y), TILE_PX):
+        on NonFiniteFloat:
+            0
+    simcity::screen::place_of(s.origin_x + tile, s.origin_y + row)
+
+# --- What the player does --------------------------------------------------
+
+nomethod fn budget_line(city: simcity::city::City) -> str:
+    simcity::words::show_income(city).concat(", ").concat(simcity::words::show_upkeep(city)).concat(", ").concat(simcity::words::show_balance(city))
+
+nomethod fn begin(game: Game) -> Game:
+    fresh = simcity::city::make(48, 48, 4242, 20000)
+    restarted = with_city(game, fresh)
+    with_message(restarted, "A new town on new land.")
+
+nomethod fn inspect(game: Game) -> Game:
+    with_tool(game, simcity::city::Tool::Inspect)
+
+nomethod fn rate(game: Game) -> Game:
+    value = raven::spin_box_value(game.tax):
+        on NonFiniteFloat:
+            std::float64::from_int(7)
+    with_city(game, simcity::city::with_bank(state(game).city, simcity::city::TAX, rate_of(value)))
+
+nomethod fn act(game: Game, name: str) -> Game:
+    if name == "tempo.pause":
+        with_speed(game, Speed::Paused)
+    elif name == "tempo.month":
+        with_speed(game, Speed::Month)
+    elif name == "tempo.rush":
+        with_speed(game, Speed::Rush)
+    elif name == "tool.road":
+        with_tool(game, simcity::city::Tool::Road)
+    elif name == "tool.wire":
+        with_tool(game, simcity::city::Tool::Wire)
+    elif name == "tool.rail":
+        with_tool(game, simcity::city::Tool::Rail)
+    elif name == "tool.residential":
+        with_tool(game, simcity::city::Tool::Residential)
+    elif name == "tool.commercial":
+        with_tool(game, simcity::city::Tool::Commercial)
+    elif name == "tool.industrial":
+        with_tool(game, simcity::city::Tool::Industrial)
+    elif name == "tool.coal":
+        with_tool(game, simcity::city::Tool::Coal)
+    elif name == "tool.nuclear":
+        with_tool(game, simcity::city::Tool::Nuclear)
+    elif name == "tool.police":
+        with_tool(game, simcity::city::Tool::Police)
+    elif name == "tool.fire":
+        with_tool(game, simcity::city::Tool::Fire)
+    elif name == "tool.park":
+        with_tool(game, simcity::city::Tool::Park)
+    elif name == "tool.bulldoze":
+        with_tool(game, simcity::city::Tool::Bulldoze)
+    elif name == "tool.inspect":
+        inspect(game)
+    elif name == "budget":
+        with_message(game, budget_line(state(game).city))
+    elif name == "new":
+        begin(game)
+    else:
+        game
+
+nomethod fn accept(game: Game, event: raven::Event) -> Game:
+    if event.kind == raven::EventKind::Action:
+        act(game, event.text)
+    elif event.kind == raven::EventKind::ValueChanged:
+        rate(game)
+    else:
+        game
+
+# --- The loop --------------------------------------------------------------
+
+# The pointer and the button, read once a frame: a click builds, a drag runs
+# a line, and the tile under the pointer is drawn as the placement preview.
+nomethod fn read_mouse(game: Game) -> Game errors NonFiniteFloat:
+    where = tile_under(game)
+    button = simcity::screen::down?(game.window, raven::window::R_MOUSE_LEFT)
+    s = state(game)
+    if button and simcity::city::inside?(s.city, where.x, where.y):
+        outcome = simcity::actions::fits(s.city, s.tool, where.x, where.y)
+        if outcome == simcity::actions::Placed::Built:
+            built = with_city(game, simcity::actions::place(s.city, s.tool, where.x, where.y))
+            with_cursor(built, where.x, where.y, button)
+        else:
+            said = with_message(game, simcity::words::show_refusal(outcome))
+            with_cursor(said, where.x, where.y, button)
+    else:
+        with_cursor(game, where.x, where.y, button)
+
+# One simulated month when the tempo's worth of timer ticks has gone by, and
+# the city keeps running while the player is, because a frame never blocks.
+nomethod fn month(game: Game) -> Game:
+    s = state(game)
+    ticks = s.ticks + 1
+    rate = speed_rate(s.speed)
+    enough = rate > 0 and ticks >= rate
+    grown = if enough:
+        simcity::sim::tick(s.city)
+    else:
+        s.city
+    next_ticks = if enough:
+        0
+    else:
+        ticks
+    put(game, State {
+        city: grown,
+        tool: s.tool,
+        speed: s.speed,
+        origin_x: s.origin_x,
+        origin_y: s.origin_y,
+        cursor_x: s.cursor_x,
+        cursor_y: s.cursor_y,
+        held: s.held,
+        ticks: next_ticks,
+        message: s.message,
+        redraw: s.redraw or enough
+    })
+    game
+
+nomethod fn run(game: Game) -> unit errors NonFiniteFloat:
+    awake = raven::wait_frame(-1.0)
+    if not awake:
+        unit
+    else:
+        heard = fold event in raven::events() with intermediate s game:
+            accept(s, event)
+        moved = read_mouse(heard)
+        next = month(moved)
+        shown = show(next)
+        run(shown)
+
+nomethod fn start(city: simcity::city::City, how: raven::Options) -> str errors NonFiniteFloat:
+    begun = raven::start(how):
+        on raven::RavenFailed failure:
+            unit
+    game = build(city):
+        on NonFiniteFloat:
+            build(simcity::city::make(48, 48, 7, 20000))
+    first = raven::draw_frame():
+        on NonFiniteFloat:
+            false
+    shown = show(game)
+    last = run(shown)
+    raven::stop()
+    "closed"

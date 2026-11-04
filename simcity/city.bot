@@ -1,0 +1,514 @@
+# simcity::city -- the city as a value: its grid, its money, its clock.
+#
+# The city is a struct of immutable facts (size) and of mutable collections:
+# one MutableArray per tile attribute, and one slot per number that changes
+# every month. Botlish structs have no field assignment, so what changes lives
+# in a collection and what does not is a field. A month takes a city, mutates
+# its grid through `place`, and returns a new city holding the new scalars --
+# the arrays are shared, so building a new city is a handful of integers, not
+# a copy of the map.
+#
+# Every accessor here is TOTAL: each one guards its index against its own
+# array's capacity, which is the form the compiler proves (proof.list-bounds),
+# so `at` and `set` cannot fail and no caller of the model carries
+# IndexNotFound. That is what lets a headless test state a case as one plain
+# expression rather than a pile of handlers.
+import std::mutable_array
+import simcity::rng
+
+# --- Terrain ---------------------------------------------------------------
+
+# --- Terrain ---------------------------------------------------------------
+
+# --- Terrain ---------------------------------------------------------------
+# --- Terrain ---------------------------------------------------------------
+WATER = 0
+
+GRASS = 1
+
+TREES = 2
+
+ROUGH = 3
+
+# --- What a tile holds -----------------------------------------------------
+
+# --- What a tile holds -----------------------------------------------------
+# --- What a tile holds -----------------------------------------------------
+# Nothing here.
+NONE = 0
+
+# A zone or a building. A zone is a 3 x 3 block whose centre tile holds its
+# development state; the other eight tiles carry the same kind and the
+# centre's coordinates in `anchor`.
+RES = 1
+
+COM = 2
+
+IND = 3
+
+COAL = 4
+
+NUCLEAR = 5
+
+POLICE = 6
+
+FIRE = 7
+
+PARK = 8
+
+# The side of a zone's block.
+ZONE_SPAN = 3
+
+# The cost of clearing one tile of land.
+CLEAR_COST = 1
+
+# A year of city time.
+MONTHS = 12
+
+TAX_DEFAULT = 7
+
+TAX_MAX = 20
+
+# --- Tools ----------------------------------------------------------------
+
+# --- Tools ----------------------------------------------------------------
+# --- Tools ----------------------------------------------------------------
+# What the player can build, for the tool palette.
+enum Tool:
+    None,
+    Road,
+    Wire,
+    Rail,
+    Residential,
+    Commercial,
+    Industrial,
+    Coal,
+    Nuclear,
+    Police,
+    Fire,
+    Park,
+    Bulldoze,
+    Inspect
+
+# The tools that place a 3 x 3 zone or building.
+nomethod fn zone_tool?(tool: Tool) -> bool:
+    tool == Tool::Residential or tool == Tool::Commercial or tool == Tool::Industrial or tool == Tool::Coal or tool == Tool::Nuclear or tool == Tool::Police or tool == Tool::Fire or tool == Tool::Park
+
+# WHETHER the tool places something on one tile.
+nomethod fn line_tool?(tool: Tool) -> bool:
+    tool == Tool::Road or tool == Tool::Wire or tool == Tool::Rail
+
+# What the tool places on a tile.
+nomethod fn kind_of(tool: Tool) -> int:
+    if tool == Tool::Residential:
+        RES
+    elif tool == Tool::Commercial:
+        COM
+    elif tool == Tool::Industrial:
+        IND
+    elif tool == Tool::Coal:
+        COAL
+    elif tool == Tool::Nuclear:
+        NUCLEAR
+    elif tool == Tool::Police:
+        POLICE
+    elif tool == Tool::Fire:
+        FIRE
+    elif tool == Tool::Park:
+        PARK
+    else:
+        NONE
+
+# The cost of one placement of the tool.
+nomethod fn cost_of(tool: Tool) -> int:
+    if tool == Tool::Road:
+        10
+    elif tool == Tool::Wire:
+        5
+    elif tool == Tool::Rail:
+        20
+    elif tool == Tool::Bulldoze:
+        CLEAR_COST
+    elif tool == Tool::Residential:
+        50
+    elif tool == Tool::Commercial:
+        200
+    elif tool == Tool::Industrial:
+        200
+    elif tool == Tool::Coal:
+        3000
+    elif tool == Tool::Nuclear:
+        5000
+    elif tool == Tool::Police:
+        500
+    elif tool == Tool::Fire:
+        500
+    elif tool == Tool::Park:
+        10
+    else:
+        0
+
+# --- The grid --------------------------------------------------------------
+
+# --- The grid --------------------------------------------------------------
+# --- The grid --------------------------------------------------------------
+# Every tile attribute, one array each. A tile's index is y * width + x.
+struct Grid:
+    land: MutableArray[int]
+    zone: MutableArray[int]
+    anchor: MutableArray[int]
+    road: MutableArray[int]
+    wire: MutableArray[int]
+    rail: MutableArray[int]
+    level: MutableArray[int]
+    powered: MutableArray[int]
+    pollution: MutableArray[int]
+    value: MutableArray[int]
+    crime: MutableArray[int]
+    fire: MutableArray[int]
+    jobs: MutableArray[int]
+    pop: MutableArray[int]
+    access: MutableArray[int]
+
+FUNDS = 0
+
+MONTH = 1
+
+TICK = 2
+
+SEED_SLOT = 3
+
+DEMAND_R = 4
+
+DEMAND_C = 5
+
+DEMAND_I = 6
+
+INCOME = 7
+
+UPKEEP = 8
+
+BALANCE = 9
+
+POPULATION = 10
+
+JOBS = 11
+
+LAST_ACTION = 12
+
+LAST_COST = 13
+
+TAX = 14
+
+BANK_SIZE = 15
+
+# --- The block's coordinates, packed ---------------------------------------
+#
+# A tile's `anchor` is the packed coordinates of the tile its zone block is
+# centred on, or -1 when the tile is in no block. Packed coordinates fit any
+# map the game can hold (x and y under 256) and read back with one mask and
+# one shift, so a caller never has to divide.
+nomethod fn pack(x: int, y: int) -> int:
+    shift_left(y, 8) + x
+
+nomethod fn pack_x(i: int) -> int:
+    bit_and(i, 255)
+
+nomethod fn pack_y(i: int) -> int:
+    shift_right(i, 8)
+
+# --- Terrain ---------------------------------------------------------------
+#
+# The land is a deterministic value noise of the seed: a lattice over 32-tile
+# cells, blended three times for water, trees and rough ground. Nothing about
+# it is random at play time, so the same seed is the same map every run.
+
+# --- Terrain ---------------------------------------------------------------
+#
+# The land is a deterministic value noise of the seed: a lattice over 32-tile
+# cells, blended three times for water, trees and rough ground. Nothing about
+# it is random at play time, so the same seed is the same map every run.
+# --- Terrain ---------------------------------------------------------------
+#
+# The land is a deterministic value noise of the seed: a lattice over 32-tile
+# cells, blended three times for water, trees and rough ground. Nothing about
+# it is random at play time, so the same seed is the same map every run.
+# One lattice value in 0 .. 255.
+nomethod fn lattice(x: int, y: int, seed: int) -> int:
+    h = seed * 2654435761 + x * 374761393 + y * 668265263
+    a = bit_xor(h, shift_right(h, 13))
+    b = a * 1274126177
+    bit_xor(b, shift_right(b, 16)).mod(256)
+
+# A bilinear blend of the lattice over 32-tile cells, in 0 .. 255.
+nomethod fn blend(x: int, y: int, seed: int) -> int:
+    cx = shift_right(x, 5)
+    cy = shift_right(y, 5)
+    nw = lattice(cx, cy, seed)
+    ne = lattice(cx + 1, cy, seed)
+    sw = lattice(cx, cy + 1, seed)
+    se = lattice(cx + 1, cy + 1, seed)
+    fx = bit_and(x, 31) * 8
+    fy = bit_and(y, 31) * 8
+    top = nw + shift_right((ne - nw) * fx, 8)
+    bottom = sw + shift_right((se - sw) * fx, 8)
+    top + shift_right((bottom - top) * fy, 8)
+
+# The terrain of the tile (X, Y) of a map of SEED.
+nomethod fn land_of(x: int, y: int, seed: int) -> int:
+    water = blend(x, y, seed)
+    trees = blend(x, y, seed * 7 + 13)
+    rough = blend(x, y, seed * 3 + 91)
+    if water < 84:
+        WATER
+    elif trees > 206:
+        TREES
+    elif rough > 216:
+        ROUGH
+    else:
+        GRASS
+
+nomethod fn fill_row(width: int, height: int, seed: int, y: int, x: int, place grid: Grid) -> unit:
+    if y >= height:
+        return unit
+    if x >= width:
+        fill_row(width, height, seed, y + 1, 0, grid)
+    else:
+        i = y * width + x
+        if i >= 0 and i < grid.land.capacity():
+            grid.land.set(i, land_of(x, y, seed))
+        else:
+            unit
+        fill_row(width, height, seed, y, x + 1, grid)
+
+nomethod fn fill_land(width: int, height: int, seed: int, place grid: Grid) -> unit:
+    fill_row(width, height, seed, 0, 0, grid)
+
+# --- The city --------------------------------------------------------------
+struct City:
+    width: int
+    height: int
+    grid: Grid
+    bank: MutableArray[int]
+
+nomethod fn width(city: City) -> int:
+    city.width
+
+nomethod fn empty_grid(width: int, height: int) -> Grid:
+    total = width * height
+    Grid {
+        land: std::mutable_array::create(total, WATER),
+        zone: std::mutable_array::create(total, NONE),
+        anchor: std::mutable_array::create(total, -1),
+        road: std::mutable_array::create(total, 0),
+        wire: std::mutable_array::create(total, 0),
+        rail: std::mutable_array::create(total, 0),
+        level: std::mutable_array::create(total, 0),
+        powered: std::mutable_array::create(total, 0),
+        pollution: std::mutable_array::create(total, 0),
+        value: std::mutable_array::create(total, 64),
+        crime: std::mutable_array::create(total, 0),
+        fire: std::mutable_array::create(total, 0),
+        jobs: std::mutable_array::create(total, 0),
+        pop: std::mutable_array::create(total, 0),
+        access: std::mutable_array::create(total, 0)
+    }
+
+# Writes N into the bank slot SLOT of the caller's own city.
+nomethod fn bank_put(place city: City, slot: int, n: int) -> unit:
+    if slot >= 0 and slot < city.bank.capacity():
+        city.bank.set(slot, n)
+    else:
+        unit
+
+# A city of WIDTH x HEIGHT tiles on the land SEED describes, with START funds.
+nomethod fn make(width: int, height: int, seed: int, start: int) -> City:
+    bank = std::mutable_array::create(BANK_SIZE, 0)
+    city = City {width: width, height: height, grid: empty_grid(width, height), bank: bank}
+    bank_put(city, FUNDS, start)
+    bank_put(city, TAX, TAX_DEFAULT)
+    bank_put(city, SEED_SLOT, simcity::rng::state_of(seed))
+    grid = city.grid
+    fill_land(width, height, seed, grid)
+    City {width: width, height: height, grid: grid, bank: city.bank}
+
+# --- Reading a tile --------------------------------------------------------
+
+# --- Reading a tile --------------------------------------------------------
+# --- Reading a tile --------------------------------------------------------
+# WHETHER (X, Y) is a tile of the map.
+nomethod fn inside?(city: City, x: int, y: int) -> bool:
+    x >= 0 and y >= 0 and x < city.width and y < city.height
+
+# The tile index of (X, Y), or -1 outside the map.
+nomethod fn index_of(city: City, x: int, y: int) -> int:
+    if x >= 0 and y >= 0 and x < city.width and y < city.height:
+        y * city.width + x
+    else:
+        -1
+
+nomethod fn read(city: City, field: MutableArray[int], x: int, y: int) -> int:
+    i = y * city.width + x
+    if x < 0 or y < 0 or x >= city.width or y >= city.height or i < 0 or i >= field.capacity():
+        0
+    else:
+        std::mutable_array::at(field, i)
+
+nomethod fn terrain(city: City, x: int, y: int) -> int:
+    read(city, city.grid.land, x, y)
+
+nomethod fn zone_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.zone, x, y)
+
+nomethod fn road_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.road, x, y)
+
+nomethod fn wire_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.wire, x, y)
+
+nomethod fn rail_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.rail, x, y)
+
+nomethod fn level_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.level, x, y)
+
+nomethod fn powered_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.powered, x, y)
+
+nomethod fn pollution_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.pollution, x, y)
+
+nomethod fn value_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.value, x, y)
+
+nomethod fn crime_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.crime, x, y)
+
+nomethod fn fire_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.fire, x, y)
+
+nomethod fn pop_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.pop, x, y)
+
+nomethod fn jobs_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.jobs, x, y)
+
+nomethod fn access_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.access, x, y)
+
+nomethod fn anchor_at(city: City, x: int, y: int) -> int:
+    read(city, city.grid.anchor, x, y)
+
+# The development level of the zone block (X, Y) belongs to.
+nomethod fn block_level(city: City, x: int, y: int) -> int:
+    i = anchor_at(city, x, y)
+    if i < 0:
+        0
+    else:
+        read(city, city.grid.level, pack_x(i), pack_y(i))
+
+# WHETHER the whole block centred on (X, Y) is inside the map.
+nomethod fn block_inside?(city: City, x: int, y: int) -> bool:
+    fold dy from -1 through 1 with intermediate ok true:
+        fold dx from -1 through 1 with intermediate yes ok:
+            yes and inside?(city, x + dx, y + dy)
+
+# --- The bank --------------------------------------------------------------
+
+# --- The bank --------------------------------------------------------------
+# --- The bank --------------------------------------------------------------
+# A bank slot, or 0 outside it: the guard is the bounds proof.
+nomethod fn bank_at(city: City, slot: int) -> int:
+    if slot < 0 or slot >= city.bank.capacity():
+        0
+    else:
+        std::mutable_array::at(city.bank, slot)
+
+nomethod fn funds(city: City) -> int:
+    bank_at(city, FUNDS)
+
+nomethod fn month(city: City) -> int:
+    bank_at(city, MONTH)
+
+nomethod fn ticks(city: City) -> int:
+    bank_at(city, TICK)
+
+nomethod fn population(city: City) -> int:
+    bank_at(city, POPULATION)
+
+nomethod fn jobs_open(city: City) -> int:
+    bank_at(city, JOBS)
+
+nomethod fn demand_r(city: City) -> int:
+    bank_at(city, DEMAND_R)
+
+nomethod fn demand_c(city: City) -> int:
+    bank_at(city, DEMAND_C)
+
+nomethod fn demand_i(city: City) -> int:
+    bank_at(city, DEMAND_I)
+
+nomethod fn income_year(city: City) -> int:
+    bank_at(city, INCOME)
+
+nomethod fn upkeep_year(city: City) -> int:
+    bank_at(city, UPKEEP)
+
+nomethod fn balance_year(city: City) -> int:
+    bank_at(city, BALANCE)
+
+nomethod fn tax_rate(city: City) -> int:
+    bank_at(city, TAX)
+
+# The demand of one zoning category (0 residential, 1 commercial, 2 industrial).
+nomethod fn want(city: City, slot: int) -> int:
+    if slot == 0:
+        demand_r(city)
+    elif slot == 1:
+        demand_c(city)
+    else:
+        demand_i(city)
+
+# --- A new city from an old one --------------------------------------------
+#
+# `with_bank` and `with_two` build the city a month returns: a fresh bank,
+# the old one copied into it, and the new scalars written in. The copy is
+# written through a place, because an array reached through an ordinary
+# parameter is that function's own copy and a write into it would be lost.
+
+# --- A new city from an old one --------------------------------------------
+#
+# `with_bank` and `with_two` build the city a month returns: a fresh bank,
+# the old one copied into it, and the new scalars written in. The copy is
+# written through a place, because an array reached through an ordinary
+# parameter is that function's own copy and a write into it would be lost.
+# --- A new city from an old one --------------------------------------------
+#
+# `with_bank` and `with_two` build the city a month returns: a fresh bank,
+# the old one copied into it, and the new scalars written in. The copy is
+# written through a place, because an array reached through an ordinary
+# parameter is that function's own copy and a write into it would be lost.
+# Copies CITY's bank into the fresh bank with_bank and with_two build.
+nomethod fn copy_bank(city: City, place bank: MutableArray[int]) -> unit:
+    if bank.capacity() >= BANK_SIZE and city.bank.capacity() >= BANK_SIZE:
+        std::mutable_array::copy(bank, 0, city.bank, 0, BANK_SIZE)
+    else:
+        unit
+
+nomethod fn with_bank(city: City, slot: int, n: int) -> City:
+    bank = std::mutable_array::create(BANK_SIZE, 0)
+    copy_bank(city, bank)
+    written = City {width: city.width, height: city.height, grid: city.grid, bank: bank}
+    bank_put(written, slot, n)
+    written
+
+nomethod fn with_two(city: City, a: int, x: int, b: int, y: int) -> City:
+    bank = std::mutable_array::create(BANK_SIZE, 0)
+    copy_bank(city, bank)
+    written = City {width: city.width, height: city.height, grid: city.grid, bank: bank}
+    bank_put(written, a, x)
+    bank_put(written, b, y)
+    written
+
+nomethod fn spend(city: City, n: int) -> City:
+    with_two(city, FUNDS, bank_at(city, FUNDS) - n, LAST_COST, n)

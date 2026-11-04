@@ -1,0 +1,254 @@
+# simcity::actions -- what the player does to the city: place, clear, spend.
+
+#
+
+# A placement is a value in, a value out: the tool, the tile, and the city the
+
+# click was on give either a new city or the reason the city did not change.
+
+# Nothing here knows about Raven, about the cursor, or about how often the
+
+# simulation ticks; it is the one place where the player's intent becomes map
+
+# state and the treasury moves.
+
+import std::mutable_array
+
+import type simcity::city::Tool
+
+import simcity::city
+
+
+
+# What a placement achieved.
+
+# What a placement achieved.
+
+# What a placement achieved.
+# What a placement achieved.
+
+# What a placement achieved.
+# What a placement achieved.
+# What a placement achieved.
+# What a placement achieved.
+enum Placed:
+    Built,
+    Poor,
+    Blocked,
+    Outside
+
+#
+# One setter per attribute: a `place` parameter names the caller's grid, and
+# a field of it is the place the array's own `set` needs. Botlish has neither
+# field assignment nor any way to choose a field by a runtime value, so a game
+# with fifteen tile attributes writes fifteen small setters. They are all the
+# same three lines, so they read as a table rather than as logic.
+nomethod fn put(place field: MutableArray[int], i: int, v: int) -> unit:
+    if i >= 0 and i < field.capacity():
+        field.set(i, v)
+    else:
+        unit
+
+nomethod fn set_land(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.land, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_zone(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.zone, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_anchor(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.anchor, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_road(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.road, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_wire(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.wire, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_rail(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.rail, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_level(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.level, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_powered(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.powered, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_pollution(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.pollution, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_value(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.value, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_crime(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.crime, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_fire(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.fire, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_jobs(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.jobs, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_pop(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.pop, simcity::city::index_of(city, x, y), v)
+
+nomethod fn set_access(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
+    put(grid.access, simcity::city::index_of(city, x, y), v)
+
+# --- Validation ------------------------------------------------------------
+
+# --- Validation ------------------------------------------------------------
+# --- Validation ------------------------------------------------------------
+# WHETHER the tile is buildable ground: land that holds nothing yet.
+nomethod fn clear?(city: simcity::city::City, x: int, y: int) -> bool:
+    if simcity::city::terrain(city, x, y) == simcity::city::WATER:
+        false
+    elif simcity::city::zone_at(city, x, y) != simcity::city::NONE:
+        false
+    elif simcity::city::road_at(city, x, y) != 0:
+        false
+    elif simcity::city::wire_at(city, x, y) != 0 or simcity::city::rail_at(city, x, y) != 0:
+        false
+    else:
+        true
+
+# WHETHER the bulldozer has something to take away here.
+nomethod fn clearable?(city: simcity::city::City, x: int, y: int) -> bool:
+    if simcity::city::zone_at(city, x, y) != simcity::city::NONE or simcity::city::road_at(city, x, y) != 0 or simcity::city::wire_at(city, x, y) != 0 or simcity::city::rail_at(city, x, y) != 0:
+        true
+    elif simcity::city::terrain(city, x, y) == simcity::city::TREES or simcity::city::terrain(city, x, y) == simcity::city::ROUGH:
+        true
+    else:
+        false
+
+nomethod fn rows_clear?(city: simcity::city::City, x: int, y: int, row: int, col: int) -> bool:
+    if row > 1:
+        true
+    elif col > 1:
+        rows_clear?(city, x, y, row + 1, -1)
+    else:
+        if not clear?(city, x + col, y + row):
+            false
+        else:
+            rows_clear?(city, x, y, row, col + 1)
+
+# WHETHER every tile of the 3 x 3 block centred on (X, Y) is clear.
+nomethod fn block_clear?(city: simcity::city::City, x: int, y: int) -> bool:
+    rows_clear?(city, x, y, -1, -1)
+
+# What a placement of TOOL at (X, Y) would achieve, without charging for it.
+nomethod fn fits(city: simcity::city::City, tool: Tool, x: int, y: int) -> Placed:
+    if not simcity::city::inside?(city, x, y):
+        Placed::Outside
+    elif simcity::city::funds(city) < simcity::city::cost_of(tool):
+        Placed::Poor
+    elif simcity::city::line_tool?(tool):
+        if clear?(city, x, y):
+            Placed::Built
+        else:
+            Placed::Blocked
+    elif tool == Tool::Bulldoze:
+        if clearable?(city, x, y):
+            Placed::Built
+        else:
+            Placed::Blocked
+    else:
+        if not simcity::city::block_inside?(city, x, y):
+            Placed::Outside
+        elif block_clear?(city, x, y):
+            Placed::Built
+        else:
+            Placed::Blocked
+
+nomethod fn apply_line(city: simcity::city::City, tool: Tool, x: int, y: int, place grid: simcity::city::Grid) -> unit:
+    if tool == Tool::Road:
+        set_road(city, x, y, 1, grid)
+    elif tool == Tool::Wire:
+        set_wire(city, x, y, 1, grid)
+    else:
+        set_rail(city, x, y, 1, grid)
+
+# Zones the nine tiles of the block centred on (X, Y).
+nomethod fn zone_block(city: simcity::city::City, kind: int, x: int, y: int, row: int, col: int, place grid: simcity::city::Grid) -> unit:
+    if row > 1:
+        return unit
+    if col > 1:
+        zone_block(city, kind, x, y, row + 1, -1, grid)
+    else:
+        tx = x + col
+        ty = y + row
+        set_zone(city, tx, ty, kind, grid)
+        set_anchor(city, tx, ty, simcity::city::pack(x, y), grid)
+        set_level(city, tx, ty, 0, grid)
+        set_powered(city, tx, ty, 0, grid)
+        set_pop(city, tx, ty, 0, grid)
+        set_jobs(city, tx, ty, 0, grid)
+        zone_block(city, kind, x, y, row, col + 1, grid)
+
+nomethod fn drop_one(city: simcity::city::City, x: int, y: int, place grid: simcity::city::Grid) -> unit:
+    set_road(city, x, y, 0, grid)
+    set_wire(city, x, y, 0, grid)
+    set_rail(city, x, y, 0, grid)
+    set_zone(city, x, y, simcity::city::NONE, grid)
+    set_anchor(city, x, y, -1, grid)
+    set_level(city, x, y, 0, grid)
+    if simcity::city::terrain(city, x, y) == simcity::city::TREES or simcity::city::terrain(city, x, y) == simcity::city::ROUGH:
+        set_land(city, x, y, simcity::city::GRASS, grid)
+    else:
+        unit
+
+# Clears the nine tiles of the zone block centred on (X, Y).
+nomethod fn unzone(city: simcity::city::City, x: int, y: int, row: int, col: int, place grid: simcity::city::Grid) -> unit:
+    if row > 1:
+        return unit
+    if col > 1:
+        unzone(city, x, y, row + 1, -1, grid)
+    else:
+        tx = x + col
+        ty = y + row
+        set_zone(city, tx, ty, simcity::city::NONE, grid)
+        set_anchor(city, tx, ty, -1, grid)
+        set_level(city, tx, ty, 0, grid)
+        set_powered(city, tx, ty, 0, grid)
+        set_pop(city, tx, ty, 0, grid)
+        set_jobs(city, tx, ty, 0, grid)
+        unzone(city, x, y, row, col + 1, grid)
+
+# Clears the tile (X, Y), or the whole zone block it belongs to.
+nomethod fn clear(city: simcity::city::City, x: int, y: int, place grid: simcity::city::Grid) -> unit:
+    centre = simcity::city::anchor_at(city, x, y)
+    if centre >= 0:
+        unzone(city, simcity::city::pack_x(centre), simcity::city::pack_y(centre), -1, -1, grid)
+    else:
+        drop_one(city, x, y, grid)
+
+# Applies TOOL to the map, which the caller has already validated.
+nomethod fn apply(city: simcity::city::City, tool: Tool, x: int, y: int, place grid: simcity::city::Grid) -> unit:
+    if simcity::city::line_tool?(tool):
+        apply_line(city, tool, x, y, grid)
+    elif simcity::city::zone_tool?(tool):
+        zone_block(city, simcity::city::kind_of(tool), x, y, -1, -1, grid)
+    elif tool == Tool::Bulldoze:
+        clear(city, x, y, grid)
+    else:
+        unit
+
+# Places TOOL on the tile (X, Y), charging for it. The city comes back
+# unchanged when the tool does not fit, does not clear, or costs more than
+# the treasury; a caller that wants to say why asks `fits` first.
+nomethod fn place(city: simcity::city::City, tool: Tool, x: int, y: int) -> simcity::city::City:
+    outcome = fits(city, tool, x, y)
+    if outcome == Placed::Built:
+        apply(city, tool, x, y, city.grid)
+        simcity::city::with_two(city, simcity::city::FUNDS, simcity::city::funds(city) - simcity::city::cost_of(tool), simcity::city::LAST_COST, simcity::city::cost_of(tool))
+    else:
+        city
+
+nomethod fn why(outcome: Placed) -> str:
+    if outcome == Placed::Built:
+        "built"
+    elif outcome == Placed::Poor:
+        "not enough funds"
+    elif outcome == Placed::Blocked:
+        "the ground is not clear"
+    else:
+        "that is off the map"

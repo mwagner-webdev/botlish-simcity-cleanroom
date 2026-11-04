@@ -1,0 +1,76 @@
+# simcity::toolbar -- the palette of tools, as buttons.
+
+#
+
+# Each button carries a named action ("tool.road", "tempo.rush", "budget",
+
+# ...) and the game's loop reads those names. That is Raven's own mechanism
+
+# for a control the program must recognise without knowing which widget it
+
+# was, and it means this module does not have to hand a handle back for the
+
+# game to compare against an event.
+
+import type simcity::city::Tool
+
+import raven
+import std::str
+
+import simcity::city
+
+import simcity::words
+
+
+
+# One button that fires the named action.
+
+# One button that fires the named action.
+
+nomethod fn action(text: str, name: str) -> raven::Widget:
+    made = raven::button(text)
+    raven::set_action(made, name)
+    made
+
+# One button that fires the named action.
+# One button that fires the named action.
+nomethod fn name_of(tool: Tool) -> str:
+    if tool == Tool::Road:
+        "road"
+    elif tool == Tool::Wire:
+        "wire"
+    elif tool == Tool::Rail:
+        "rail"
+    elif tool == Tool::Residential:
+        "residential"
+    elif tool == Tool::Commercial:
+        "commercial"
+    elif tool == Tool::Industrial:
+        "industrial"
+    elif tool == Tool::Coal:
+        "coal"
+    elif tool == Tool::Nuclear:
+        "nuclear"
+    elif tool == Tool::Police:
+        "police"
+    elif tool == Tool::Fire:
+        "fire"
+    elif tool == Tool::Park:
+        "park"
+    elif tool == Tool::Bulldoze:
+        "bulldoze"
+    elif tool == Tool::Inspect:
+        "inspect"
+    else:
+        "none"
+
+# A tool's button: its name and its price.
+nomethod fn tool(tool: Tool) -> raven::Widget:
+    action(simcity::words::show_tool(tool).concat("  ").concat(simcity::words::show_cost(tool)), "tool.".concat(name_of(tool)))
+
+# The palette, and the things that are not tools at all.
+nomethod fn column() -> raven::Widget:
+    tools = raven::vbox().add(tool(Tool::Road)).add(tool(Tool::Wire)).add(tool(Tool::Rail)).add(tool(Tool::Residential)).add(tool(Tool::Commercial)).add(tool(Tool::Industrial)).add(tool(Tool::Coal)).add(tool(Tool::Nuclear)).add(tool(Tool::Police)).add(tool(Tool::Fire)).add(tool(Tool::Park)).add(tool(Tool::Bulldoze)).add(action("Inspect", "tool.inspect"))
+    tempos = raven::vbox().add(action("Pause", "tempo.pause")).add(action("Month", "tempo.month")).add(action("Rush", "tempo.rush"))
+    others = raven::vbox().add(tempos).add(action("Budget", "budget")).add(action("New town", "new")).add(raven::label("Click to build, drag to run a line, arrow keys move the view."))
+    raven::vbox().add(tools).add(others)

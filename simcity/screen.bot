@@ -1,0 +1,197 @@
+# simcity::screen -- the game's one layer of raw native memory.
+
+#
+
+# Two things in this game cannot be done through a wrapped call, and both
+
+# need memory of our own that C writes into:
+
+#
+
+#   * Raven draws what a texture holds, and a texture is made from RGBA bytes
+
+#     in native memory. The screen holds one buffer of `4 * width * height`
+
+#     bytes, uploads it and keeps it alive while the screen lives.
+
+#   * Raven reports control input through the package's event bridge, but the
+
+#     bridge watches named widget kinds only: nothing watches the map the game
+
+#     draws into a texture. So the game polls the window, through the generated
+
+#     binding of Raven's own polling functions, and those write C floats into
+
+#     out-parameters of our own.
+
+#
+
+# Because that is where raw authority lives, the module needs a context of its
+
+# own: `Screen` owns the native memory, is installed once by the entry program,
+
+# and nothing above this module is direct for holding it.
+
+import std::abi
+
+import std::binary
+
+import std::binary::native
+
+import std::abi::bytes
+
+import std::byte
+
+import std::ffi::c
+
+import std::list
+
+import std::mutable_array
+
+import std::mutable_vector
+
+import raven
+
+import raven::resources
+
+import raven::window
+
+
+
+extern c library "raven_bridge" static
+
+
+
+private extern c fn calloc(count: std::ffi::c::ULong, size: std::ffi::c::ULong) -> std::ffi::c::Ptr[std::ffi::c::Void] independent
+
+private extern c fn free(memory: std::ffi::c::Ptr[std::ffi::c::Void]) -> unit
+
+
+
+# memcpy(out, data, count) through the package's bridge: DATA is lent read-only
+
+# by Botlish, OUT is this module's own native memory, so a frame reaches Raven
+
+# by exactly one copy.
+
+private extern c fn botlish_raven_bytes_copy(data: std::ffi::c::Ptr[std::ffi::c::UChar] read noescape, out: std::ffi::c::Ptr[std::ffi::c::UChar] write noescape, count: std::ffi::c::ULong) -> std::ffi::c::ULong
+
+
+
+error OutOfRange
+
+nomethod fn u_uint(n: int) -> std::ffi::c::UInt errors OutOfRange:
+    if n < 0 or n > 4294967295:
+        fail OutOfRange
+    n
+
+nomethod fn none_texture() -> std::ffi::c::UInt errors OutOfRange:
+    u_uint(4294967295)
+
+nomethod fn u_long(n: int) -> std::ffi::c::ULong errors OutOfRange:
+    if n < 0 or n > 18446744073709551615:
+        fail OutOfRange
+    n
+
+nomethod fn c_int(n: int) -> std::ffi::c::Int errors OutOfRange:
+    if n < 0 or n > 2147483647:
+        fail OutOfRange
+    n
+
+nomethod fn flat_bytes(rows: List[List[std::byte::Byte]]) -> List[std::byte::Byte]:
+    std::list::flat(rows)
+
+# One allocation of this module's memory.
+private struct Cell:
+    bytes: std::ffi::c::Ptr[std::ffi::c::UChar]
+    xy: std::ffi::c::Ptr[std::ffi::c::Float]
+    size: int
+
+# One C float in native memory.
+private layout FloatCell:
+    size 4
+    align 4
+    field value: std::ffi::c::Float at 0
+
+# WHETHER 4 * WIDTH * HEIGHT is a size this module can hold.
+nomethod fn sized?(width: int, height: int) -> bool:
+    width > 0 and height > 0 and 4 * width * height < 2147483647
+
+# The screen's native memory: the frame buffer and the mouse's two floats.
+opaque context struct Screen:
+    cells: MutableVector[Cell]
+
+nomethod fn create() -> Screen:
+    Screen {cells: std::mutable_vector::from_list([])}
+
+# Allocates a 4 * WIDTH * HEIGHT byte frame buffer and the mouse's
+# out-parameters. OutOfRange: the size is no C number, or there is no memory.
+nomethod fn open(width: int, height: int, context s: Screen) -> unit errors OutOfRange:
+    total = 4 * width * height
+    want = if sized?(width, height):
+        total
+    else:
+        0
+    if s.cells.empty?():
+        frame = calloc(u_long(1), u_long(want))
+        mouse = calloc(u_long(1), u_long(8))
+        if frame.null?() or mouse.null?():
+            gone = std::ffi::c::erase(frame)
+            gone2 = std::ffi::c::erase(mouse)
+            free(gone)
+            free(gone2)
+            fail OutOfRange
+        cell = Cell {bytes: std::ffi::c::retype[std::ffi::c::UChar](frame), xy: std::ffi::c::retype[std::ffi::c::Float](mouse), size: total}
+        s.cells.push(cell)
+    else:
+        unit
+
+nomethod fn release(context s: Screen) -> unit errors IndexNotFound:
+    cell = s.cells.pop()
+    {bytes} = cell
+    gone = std::ffi::c::erase(bytes)
+    free(gone)
+
+# Raven's handle for a texture holding PIXELS, which must be exactly
+# 4 * WIDTH * HEIGHT bytes: it is lent read-only for the upload.
+nomethod fn texture_of(pixels: std::abi::bytes::Bytes, width: int, height: int, context s: Screen) -> std::ffi::c::UInt errors IndexNotFound, OutOfRange:
+    count = u_long(s.cells.element(0).size)
+    wide = c_int(width)
+    high = c_int(height)
+    pixels.botlish_raven_bytes_copy(s.cells.element(0).bytes, count)
+    raven::resources::Rtexture_create_from_pixels(s.cells.element(0).bytes, wide, high)
+
+# Uploads PIXELS (a whole frame, 4 * WIDTH * HEIGHT of them) into the buffer
+# and tells Raven the texture changed.
+nomethod fn show(pixels: std::abi::bytes::Bytes, texture: std::ffi::c::UInt, width: int, height: int, context s: Screen) -> unit errors IndexNotFound, OutOfRange:
+    count = u_long(s.cells.element(0).size)
+    wide = c_int(width)
+    high = c_int(height)
+    pixels.botlish_raven_bytes_copy(s.cells.element(0).bytes, count)
+    raven::resources::Rtexture_update(texture, s.cells.element(0).bytes, wide, high)
+
+# The mouse's position in the window's last frame, in logical units: Raven
+# writes it into the screen's out-parameters and they are read back. A NaN or
+# an infinity, which no window reports, is NonFiniteFloat.
+nomethod fn mouse_at(window: raven::Window, context s: Screen) -> List[Float64] errors IndexNotFound, NativeViewNull, OutOfRange, NonFiniteFloat:
+    raven::window::Rwindow_get_mouse_position(window.id, s.cells.element(0).xy, s.cells.element(0).xy)
+    view = std::binary::native::view(FloatCell, s.cells.element(0).xy)
+    here = std::binary::native::view(FloatCell, s.cells.element(0).xy)
+    [view.value, here.value]
+
+nomethod fn down?(window: raven::Window, button: std::ffi::c::UInt) -> bool:
+    raven::window::Rwindow_is_mouse_button_down(window.id, button) != 0
+
+nomethod fn key_down(window: raven::Window, key: std::ffi::c::UInt) -> bool:
+    raven::window::Rwindow_is_key_down(window.id, key) != 0
+
+nomethod fn inside(window: raven::Window) -> bool:
+    raven::window::Rwindow_is_mouse_inside(window.id) != 0
+
+# A point of the window, as the x and y the map's tiles are measured from.
+struct Place:
+    x: int
+    y: int
+
+nomethod fn place_of(x: int, y: int) -> Place:
+    Place {x: x, y: y}

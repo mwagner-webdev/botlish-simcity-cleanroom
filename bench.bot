@@ -1,0 +1,57 @@
+# bench.bot -- the deterministic performance report.
+#
+# Builds the town the scenarios build, lets it grow for a hundred months, and
+# then advances a thousand more, timing the whole run. A real display is not
+# needed: Raven is started headless only because that is the portable way to
+# read a clock, and the null renderer draws nothing. What is measured is the
+# simulation alone -- no frame is uploaded, no window is laid out.
+import raven
+import raven::core
+import std::float64
+import std::int
+import std::mutable_array
+import std::str
+import simcity::city
+import simcity::render
+import simcity::scenario
+import simcity::sim
+
+with context raven::create()
+
+# The developable tiles the city has: zoned, and built on.
+nomethod fn built(city: simcity::city::City, i: int, made: int) -> int:
+    if i < 0 or i >= std::mutable_array::capacity(city.grid.zone):
+        made
+    else:
+        x = i.mod(city.width)
+        y = simcity::sim::divide(i, city.width)
+        more = if simcity::city::zone_at(city, x, y) != simcity::city::NONE and simcity::city::level_at(city, x, y) > 0:
+            1
+        else:
+            0
+        built(city, i + 1, made + more)
+
+nomethod fn whole(value: Float64) -> int:
+    std::float64::truncate(value)
+
+fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
+    raven::start(raven::headless())
+    town = simcity::scenario::town_map(simcity::city::make(48, 48, 7, 20000))
+    warm = simcity::scenario::months(town, 400)
+    tiles = built(warm, 0, 0)
+    first = raven::core::Rget_time()
+    run = fold i from 0 to 1000 with intermediate s warm:
+        simcity::sim::tick(s)
+    last = raven::core::Rget_time()
+    raven::stop()
+    spent = last - first
+    ticks = simcity::city::ticks(run)
+    frame = simcity::render::frame(run, 0, 0, simcity::render::TILE, 1, -1)
+    ["the map is ".concat(std::int::to_string(run.width)).concat(" by ").concat(std::int::to_string(run.height)).concat(" tiles"), "developed tiles ".concat(std::int::to_string(tiles)), "residents ".concat(std::int::to_string(simcity::city::population(run))), "funds ".concat(std::int::to_string(simcity::city::funds(run))), "months advanced ".concat(std::int::to_string(ticks)), "1000 months took ".concat(std::int::to_string(whole(spent * 1000.0))).concat(" ms"), "one month takes ".concat(std::int::to_string(whole(spent * 1000000.0 / 1000.0))).concat(" microseconds")]
+
+result = main():
+    on raven::RavenFailed failure:
+        [failure.detail]
+    on NonFiniteFloat:
+        ["no clock"]
+result

@@ -1,0 +1,371 @@
+# tests.bot -- the headless suite: the simulation, tested without a window.
+#
+# Run it with
+#     ./botlish-linux-x86_64 -backend cranelift tests.bot
+#
+# Every case compares a model output, never a process exit: the value of a
+# successful run is the suite's report.
+import std::int
+import std::list
+import std::str
+import std::test
+import simcity::actions
+import simcity::city
+import simcity::scenario
+import simcity::sim
+
+with context std::test::suite()
+
+# --- Helpers ---------------------------------------------------------------
+
+nomethod fn puts(city: simcity::city::City, tool: simcity::city::Tool, x: int, y: int) -> simcity::city::City:
+    simcity::actions::place(city, tool, x, y)
+
+nomethod fn roads(city: simcity::city::City, x0: int, y: int, x1: int) -> simcity::city::City:
+    if x0 > x1:
+        city
+    else:
+        roads(puts(city, simcity::city::Tool::Road, x0, y), x0 + 1, y, x1)
+
+nomethod fn town(seed: int) -> simcity::city::City:
+    simcity::scenario::town(seed)
+
+nomethod fn text_of(m: simcity::scenario::Metrics) -> str:
+    "pop ".concat(std::int::to_string(m.population)).concat(" funds ").concat(std::int::to_string(m.funds)).concat(" res ").concat(std::int::to_string(m.residential))
+
+# --- Construction ----------------------------------------------------------
+
+fn road_costs_what_the_palette_says():
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    built = puts(fresh, simcity::city::Tool::Road, 4, 4)
+    [simcity::city::funds(built), simcity::city::road_at(built, 4, 4)]
+
+nomethod fn fitted(o: simcity::actions::Placed) -> int:
+    if o == simcity::actions::Placed::Built:
+        1
+    elif o == simcity::actions::Placed::Poor:
+        2
+    elif o == simcity::actions::Placed::Blocked:
+        3
+    else:
+        4
+
+nomethod fn fewer_residents(numbers: List[int]) -> bool:
+    std::list::get(numbers, 0, 0) == 0 and std::list::get(numbers, 1, 0) == 0 and std::list::get(numbers, 2, 0) < std::list::get(numbers, 3, 0)
+
+nomethod fn a_city_anyway(numbers: List[int]) -> bool:
+    std::list::get(numbers, 0, 0) > 300 and std::list::get(numbers, 2, 0) == 1
+
+fn a_zone_is_its_whole_block():
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    built = puts(fresh, simcity::city::Tool::Residential, 5, 5)
+    corners = fold row from -1 through 1 with intermediate t 0:
+        fold col from -1 through 1 with intermediate u t:
+            u + simcity::city::zone_at(built, 5 + col, 5 + row)
+    [corners, simcity::city::zone_at(built, 5, 5), simcity::city::block_level(built, 5, 5)]
+
+fn a_second_zone_cannot_overlap_the_first():
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    built = puts(fresh, simcity::city::Tool::Residential, 5, 5)
+    second = puts(built, simcity::city::Tool::Commercial, 5, 7)
+    [simcity::city::funds(second), simcity::city::zone_at(second, 5, 7)]
+
+fn a_road_cannot_be_built_on_water():
+    fresh = simcity::city::make(32, 32, 7, 20000)
+    wet = simcity::city::terrain(fresh, 0, 29)
+    [wet, simcity::city::funds(puts(fresh, simcity::city::Tool::Road, 0, 29))]
+
+fn nothing_is_built_on_water():
+    fresh = simcity::city::make(32, 32, 7, 20000)
+    wet = simcity::city::terrain(fresh, 0, 29)
+    built = puts(fresh, simcity::city::Tool::Residential, 0, 29)
+    [wet, simcity::city::zone_at(built, 0, 29), simcity::city::funds(built)]
+
+fn the_treasury_stops_a_build_it_cannot_pay_for():
+    fresh = simcity::city::make(16, 16, 1, 100)
+    tried = puts(fresh, simcity::city::Tool::Nuclear, 8, 8)
+    [simcity::city::funds(tried), simcity::city::zone_at(tried, 8, 8)]
+
+fn bulldozing_takes_a_zone_away():
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    zoned = puts(fresh, simcity::city::Tool::Residential, 5, 5)
+    dug = puts(zoned, simcity::city::Tool::Bulldoze, 6, 6)
+    [simcity::city::zone_at(dug, 5, 5), simcity::city::zone_at(dug, 6, 6), simcity::city::funds(dug)]
+
+fn bulldozing_takes_a_line_away():
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    wired = puts(fresh, simcity::city::Tool::Wire, 4, 4)
+    cut = puts(wired, simcity::city::Tool::Bulldoze, 4, 4)
+    [simcity::city::wire_at(cut, 4, 4), simcity::city::funds(cut)]
+
+fn bulldozing_a_grown_block_takes_its_people_too():
+    fresh = simcity::city::make(32, 32, 7, 20000)
+    t1 = simcity::scenario::road_up(fresh, 10, 0, 23)
+    t2 = simcity::scenario::wire_up(t1, 14, 0, 23)
+    t3 = simcity::scenario::wires(t2, 15, 10, 23)
+    t4 = puts(t3, simcity::city::Tool::Coal, 25, 10)
+    t5 = puts(t4, simcity::city::Tool::Residential, 12, 8)
+    t6 = puts(t5, simcity::city::Tool::Residential, 12, 18)
+    grown = simcity::scenario::months(t6, 150)
+    dug = puts(grown, simcity::city::Tool::Bulldoze, 12, 8)
+    [simcity::city::level_at(dug, 12, 8), simcity::city::pop_at(dug, 12, 8), simcity::sim::residents(dug), simcity::sim::residents(grown)]
+
+fn clearing_land_costs_money():
+    fresh = simcity::city::make(32, 32, 7, 20000)
+    road = puts(fresh, simcity::city::Tool::Road, 12, 12)
+    bare = puts(fresh, simcity::city::Tool::Bulldoze, 3, 3)
+    [std::int::to_string(simcity::city::funds(road)), std::int::to_string(simcity::city::funds(puts(road, simcity::city::Tool::Bulldoze, 12, 12))), std::int::to_string(simcity::city::funds(bare)), std::int::to_string(simcity::city::road_at(puts(road, simcity::city::Tool::Bulldoze, 12, 12), 12, 12))]
+
+# --- Map boundaries --------------------------------------------------------
+
+fn a_block_at_the_corner_cannot_be_placed():
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    [fitted(simcity::actions::fits(fresh, simcity::city::Tool::Residential, 0, 0)), fitted(simcity::actions::fits(fresh, simcity::city::Tool::Residential, 1, 1))]
+
+fn nothing_is_placed_off_the_map():
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    [simcity::city::zone_at(fresh, 20, 3), simcity::city::road_at(fresh, 3, 20), simcity::city::terrain(fresh, -2, 3), simcity::city::funds(puts(fresh, simcity::city::Tool::Road, 30, 30))]
+
+fn the_map_is_the_size_it_was_made_with():
+    city = simcity::city::make(48, 48, 3, 1000)
+    [city.width, city.height, simcity::city::index_of(city, 47, 47), simcity::city::index_of(city, 48, 0), simcity::city::index_of(city, -1, 3), simcity::city::road_at(city, 48, 48)]
+
+# --- Power ----------------------------------------------------------------
+
+fn a_lone_zone_has_no_power():
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    built = puts(fresh, simcity::city::Tool::Residential, 8, 8)
+    stepped = simcity::sim::tick(built)
+    [simcity::city::powered_at(stepped, 8, 8), simcity::city::access_at(stepped, 8, 8)]
+
+fn a_plant_and_a_line_light_the_block_on_it():
+    fresh = simcity::city::make(24, 24, 1, 20000)
+    t1 = simcity::scenario::wires(fresh, 4, 8, 12)
+    t2 = puts(t1, simcity::city::Tool::Coal, 14, 8)
+    t3 = puts(t2, simcity::city::Tool::Residential, 8, 10)
+    stepped = simcity::sim::tick(t3)
+    [simcity::city::powered_at(stepped, 8, 10), simcity::city::powered_at(stepped, 14, 8)]
+
+fn a_break_in_the_line_cuts_the_power_behind_it():
+    town = town(7)
+    grown = simcity::scenario::months(town, 120)
+    cut = puts(grown, simcity::city::Tool::Bulldoze, 18, 10)
+    dark = simcity::scenario::months(cut, 36)
+    [simcity::city::powered_at(dark, 12, 8), simcity::city::powered_at(dark, 12, 20), simcity::city::population(dark)]
+
+fn a_plant_beyond_its_capacity_does_not_light_everything():
+    fresh = simcity::city::make(24, 24, 1, 20000)
+    t1 = simcity::scenario::wires(fresh, 4, 8, 18)
+    t2 = puts(t1, simcity::city::Tool::Coal, 20, 8)
+    t3 = puts(t2, simcity::city::Tool::Residential, 6, 10)
+    stepped = simcity::sim::tick(t3)
+    [simcity::city::powered_at(stepped, 6, 10), simcity::sim::capacity(0, 0, stepped)]
+
+# --- Roads ----------------------------------------------------------------
+
+fn a_road_that_reaches_the_edge_serves_its_blocks():
+    town = town(7)
+    stepped = simcity::sim::tick(town)
+    [simcity::city::access_at(stepped, 10, 8), simcity::city::access_at(stepped, 12, 14)]
+
+fn a_road_that_reaches_nothing_serves_nobody():
+    fresh = simcity::city::make(24, 24, 1, 20000)
+    t1 = roads(fresh, 4, 6, 20)
+    t2 = puts(t1, simcity::city::Tool::Coal, 22, 6)
+    t3 = puts(t2, simcity::city::Tool::Residential, 10, 8)
+    stepped = simcity::sim::tick(t3)
+    [simcity::city::access_at(stepped, 10, 8), simcity::city::level_at(stepped, 12, 8)]
+
+fn a_zone_with_no_road_nearby_is_not_reached():
+    fresh = simcity::city::make(24, 24, 1, 20000)
+    t1 = roads(fresh, 0, 6, 4)
+    t2 = simcity::scenario::wires(t1, 0, 20, 4)
+    t3 = puts(t2, simcity::city::Tool::Coal, 6, 20)
+    t4 = puts(t3, simcity::city::Tool::Residential, 10, 8)
+    stepped = simcity::sim::tick(t4)
+    [simcity::city::access_at(stepped, 10, 8), simcity::city::powered_at(stepped, 12, 8)]
+
+# --- Growth and decline ---------------------------------------------------
+
+fn a_served_powered_town_grows():
+    a = simcity::scenario::healthy(7)
+    [a.population, a.residential, a.commercial, a.industrial]
+
+fn a_town_cut_off_from_power_stops_growing():
+    b = simcity::scenario::blackout(7)
+    [b.population, b.residential, b.powered]
+
+fn a_town_with_no_road_stops_growing():
+    c = simcity::scenario::no_road(7)
+    [c.population, c.residential, c.reached]
+
+fn a_town_taxed_to_the_maximum_declines():
+    d = simcity::scenario::taxed(7)
+    h = simcity::scenario::healthy(7)
+    [d.population, h.population]
+
+fn a_town_taxed_to_the_maximum_wants_less():
+    healthy = simcity::scenario::healthy(7)
+    squeezed = simcity::scenario::taxed(7)
+    [healthy.demand_r, squeezed.demand_r]
+
+fn industry_next_door_makes_housing_worth_less():
+    e = simcity::scenario::smoky(7)
+    [e.nearby_value, e.far_value]
+
+fn a_city_that_cannot_pay_goes_dark():
+    f = simcity::scenario::broke(7)
+    [f.funds, f.population]
+
+# --- Budget ---------------------------------------------------------------
+
+fn the_treasury_moves_with_build_and_tax():
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    built = puts(fresh, simcity::city::Tool::Road, 4, 4)
+    zoned = puts(built, simcity::city::Tool::Residential, 8, 8)
+    [simcity::city::funds(fresh), simcity::city::funds(built), simcity::city::funds(zoned)]
+
+fn a_year_of_taxes_and_upkeep_is_written_to_the_bank():
+    a = simcity::scenario::healthy(7)
+    [a.income, a.upkeep, a.balance, a.income - a.upkeep]
+
+fn maintenance_is_charged_every_month():
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    kept = puts(fresh, simcity::city::Tool::Police, 8, 8)
+    one = simcity::sim::tick(kept)
+    twelve = fold i from 0 to 11 with intermediate s one:
+        simcity::sim::tick(s)
+    [simcity::city::funds(fresh), simcity::city::funds(one), simcity::city::funds(twelve), simcity::city::month(twelve)]
+
+# --- Determinism ----------------------------------------------------------
+
+fn the_same_seed_and_the_same_actions_give_the_same_city():
+    one = simcity::scenario::healthy(7)
+    two = simcity::scenario::healthy(7)
+    [one.population, two.population, one.residential, two.residential, one.funds, two.funds]
+
+fn a_different_seed_gives_a_different_map():
+    one = simcity::city::make(16, 16, 1, 20000)
+    two = simcity::city::make(16, 16, 99, 20000)
+    differ = fold y from 0 to 16 with intermediate n 0:
+        fold x from 0 to 16 with intermediate u n:
+            if simcity::city::terrain(one, x, y) == simcity::city::terrain(two, x, y):
+                u
+            else:
+                u + 1
+    [differ]
+
+fn the_months_run_on_their_own_clock():
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    after = simcity::sim::tick(simcity::sim::tick(simcity::sim::tick(fresh)))
+    [simcity::city::ticks(fresh), simcity::city::ticks(after), simcity::city::month(fresh), simcity::city::month(after)]
+
+# --- Two cities, no shared state ------------------------------------------
+
+fn two_cities_do_not_share_their_tiles():
+    one = simcity::city::make(16, 16, 1, 20000)
+    two = simcity::city::make(16, 16, 1, 20000)
+    edited = puts(one, simcity::city::Tool::Road, 4, 4)
+    [simcity::city::road_at(edited, 4, 4), simcity::city::road_at(two, 4, 4)]
+
+fn building_in_one_city_does_not_spend_another_money():
+    one = simcity::city::make(16, 16, 1, 20000)
+    two = simcity::city::make(16, 16, 1, 20000)
+    edited = puts(one, simcity::city::Tool::Coal, 8, 8)
+    [simcity::city::funds(edited), simcity::city::funds(two)]
+
+fn two_cities_simulate_independently():
+    town = town(7)
+    grown = simcity::scenario::months(town, 60)
+    quiet = simcity::city::make(16, 16, 1, 20000)
+    still = simcity::sim::tick(quiet)
+    [simcity::city::population(grown), simcity::city::population(still), simcity::city::level_at(grown, 10, 8), simcity::city::level_at(still, 10, 8)]
+
+# --- Rendering is not required --------------------------------------------
+
+fn the_simulation_needs_no_window():
+    town = simcity::scenario::town(7)
+    grown = simcity::scenario::months(town, 120)
+    stepped = simcity::sim::tick(grown)
+    [simcity::city::population(stepped), simcity::city::funds(stepped), simcity::city::powered_at(stepped, 12, 8)]
+
+nomethod fn all_dark(numbers: List[int]) -> bool:
+    std::list::get(numbers, 0, 0) == 0 and std::list::get(numbers, 1, 0) == 0 and std::list::get(numbers, 2, 0) == 0
+
+nomethod fn twelve_charged(numbers: List[int]) -> bool:
+    std::list::get(numbers, 0, 0) == 20000 and std::list::get(numbers, 1, 0) == 19492 and std::list::get(numbers, 2, 0) < std::list::get(numbers, 1, 0) and std::list::get(numbers, 3, 0) == 0
+
+nomethod fn grows_up(numbers: List[int]) -> bool:
+    std::list::get(numbers, 0, 0) > 300 and std::list::get(numbers, 1, 0) >= 3 and std::list::get(numbers, 2, 0) >= 2 and std::list::get(numbers, 3, 0) >= 2
+
+nomethod fn goes_dark(numbers: List[int]) -> bool:
+    std::list::get(numbers, 0, 0) < 60 and std::list::get(numbers, 1, 0) == 0
+
+nomethod fn empty_run(numbers: List[int]) -> bool:
+    std::list::get(numbers, 0, 0) == 0 and std::list::get(numbers, 1, 0) == 0
+
+nomethod fn wants_less(numbers: List[int]) -> bool:
+    std::list::get(numbers, 1, 0) < std::list::get(numbers, 0, 0) - 30
+
+nomethod fn worth_less(numbers: List[int]) -> bool:
+    std::list::get(numbers, 0, 0) < std::list::get(numbers, 1, 0) - 10
+
+nomethod fn out_of_money(numbers: List[int]) -> bool:
+    std::list::get(numbers, 0, 0) < 0
+
+nomethod fn fewer_people(numbers: List[int]) -> bool:
+    std::list::get(numbers, 0, 0) < std::list::get(numbers, 1, 0)
+
+nomethod fn balances(numbers: List[int]) -> bool:
+    std::list::get(numbers, 2, 0) == std::list::get(numbers, 0, 0) - std::list::get(numbers, 1, 0)
+
+nomethod fn same_city(numbers: List[int]) -> bool:
+    std::list::get(numbers, 0, 0) == std::list::get(numbers, 1, 0) and std::list::get(numbers, 2, 0) == std::list::get(numbers, 3, 0) and std::list::get(numbers, 4, 0) == std::list::get(numbers, 5, 0)
+
+nomethod fn some_differ(numbers: List[int]) -> bool:
+    std::list::get(numbers, 0, 0) > 0
+
+nomethod fn untouched(numbers: List[int]) -> bool:
+    std::list::get(numbers, 1, 0) == 0 and std::list::get(numbers, 3, 0) == 0
+
+nomethod fn register_tests():
+    std::test::value("a road costs what the palette says", [19990, 1], road_costs_what_the_palette_says)
+    std::test::value("a zone is its whole block", [9, 1, 0], a_zone_is_its_whole_block)
+    std::test::value("a second zone cannot overlap the first", [19950, 0], a_second_zone_cannot_overlap_the_first)
+    std::test::value("a road cannot be built on water", [0, 20000], a_road_cannot_be_built_on_water)
+    std::test::value("nothing is built on water", [0, 0, 20000], nothing_is_built_on_water)
+    std::test::value("the treasury stops a build it cannot pay for", [100, 0], the_treasury_stops_a_build_it_cannot_pay_for)
+    std::test::value("bulldozing takes a zone away", [0, 0, 19949], bulldozing_takes_a_zone_away)
+    std::test::value("bulldozing takes a line away", [0, 19994], bulldozing_takes_a_line_away)
+    std::test::value("clearing land costs money", ["19990", "19989", "20000", "0"], clearing_land_costs_money)
+    std::test::holds("bulldozing a grown block takes its people too", "its residents leave with it", fewer_residents, bulldozing_a_grown_block_takes_its_people_too)
+    std::test::value("a block at the corner cannot be placed", [4, 1], a_block_at_the_corner_cannot_be_placed)
+    std::test::value("nothing is placed off the map", [0, 0, 0, 20000], nothing_is_placed_off_the_map)
+    std::test::value("the map is the size it was made with", [48, 48, 2303, -1, -1, 0], the_map_is_the_size_it_was_made_with)
+    std::test::value("a lone zone has no power", [0, 0], a_lone_zone_has_no_power)
+    std::test::value("a plant and a line light the block on it", [1, 1], a_plant_and_a_line_light_the_block_on_it)
+    std::test::holds("a break in the line cuts the power behind it", "every block goes dark", all_dark, a_break_in_the_line_cuts_the_power_behind_it)
+    std::test::value("a plant beyond its capacity does not light everything", [1, 900], a_plant_beyond_its_capacity_does_not_light_everything)
+    std::test::value("a road that reaches the edge serves its blocks", [1, 1], a_road_that_reaches_the_edge_serves_its_blocks)
+    std::test::value("a road that reaches nothing serves nobody", [0, 0], a_road_that_reaches_nothing_serves_nobody)
+    std::test::value("a zone with no road nearby is not reached", [0, 0], a_zone_with_no_road_nearby_is_not_reached)
+    std::test::holds("a served, powered town grows", "the population and every zone level", grows_up, a_served_powered_town_grows)
+    std::test::holds("a town cut off from power stops growing", "the population and its housing level", goes_dark, a_town_cut_off_from_power_stops_growing)
+    std::test::holds("a town with no road stops growing", "the population and its housing level", empty_run, a_town_with_no_road_stops_growing)
+    std::test::holds("a town taxed to the maximum wants less", "residential demand lower than at the ordinary rate", wants_less, a_town_taxed_to_the_maximum_wants_less)
+    std::test::holds("industry next door makes housing worth less", "the value of the ground beside the works", worth_less, industry_next_door_makes_housing_worth_less)
+    std::test::holds("a city that cannot pay goes dark", "the treasury runs out", out_of_money, a_city_that_cannot_pay_goes_dark)
+    std::test::holds("a town taxed to the maximum declines", "fewer residents than the healthy city", fewer_people, a_town_taxed_to_the_maximum_declines)
+    std::test::value("the treasury moves with build and tax", [20000, 19990, 19940], the_treasury_moves_with_build_and_tax)
+    std::test::holds("a year of taxes and upkeep balances", "the year's income less its upkeep", balances, a_year_of_taxes_and_upkeep_is_written_to_the_bank)
+    std::test::holds("maintenance is charged every month", "twelve months of upkeep taken", twelve_charged, maintenance_is_charged_every_month)
+    std::test::holds("the same seed and the same actions give the same city", "every figure the same", same_city, the_same_seed_and_the_same_actions_give_the_same_city)
+    std::test::holds("a different seed gives a different map", "at least one tile differs", some_differ, a_different_seed_gives_a_different_map)
+    std::test::value("the months run on their own clock", [0, 3, 0, 3], the_months_run_on_their_own_clock)
+    std::test::value("two cities do not share their tiles", [1, 0], two_cities_do_not_share_their_tiles)
+    std::test::value("building in one city does not spend another money", [17000, 20000], building_in_one_city_does_not_spend_another_money)
+    std::test::holds("two cities simulate independently", "the other city untouched", untouched, two_cities_simulate_independently)
+    std::test::holds("the simulation needs no window", "a city grows with no window anywhere", a_city_anyway, the_simulation_needs_no_window)
+
+register_tests()
+std::test::report()
