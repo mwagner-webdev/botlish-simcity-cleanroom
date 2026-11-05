@@ -1,0 +1,63 @@
+# sight.bot -- is the map actually drawn, or is the area blank?
+#
+# Runs the game's window on the real renderer (the lavapipe software Vulkan
+# driver and an X display are enough) and reads the window's pixels back
+# twice: once before the map's first texture goes in, and once after.
+#
+# Raven's own guide offers exactly this comparison, `before.pixels !=
+# after.pixels`, as the way to see that a change was drawn. It is the whole
+# test: a texture uploaded into a widget that is not an image draws nothing,
+# and both frames are then the same picture.
+import raven
+import raven::widget
+import std::int
+import std::str
+import simcity::app
+import simcity::city
+import simcity::scenario
+import simcity::screen
+
+with context raven::create()
+with context simcity::screen::create()
+
+nomethod fn frame() -> bool errors NonFiniteFloat:
+    drawn = raven::draw_frame():
+        on NonFiniteFloat:
+            false
+    drawn
+
+# WHETHER the two frames differ anywhere.
+nomethod fn changed(before: raven::Image, after: raven::Image) -> bool:
+    before.width != after.width or before.height != after.height or before.pixels != after.pixels
+
+fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
+    raven::start(raven::desktop())
+    town = simcity::scenario::town(7)
+    game = simcity::app::build(town)
+    first = frame()
+    before = raven::capture(game.window)
+    shown = simcity::app::show(game)
+    second = frame()
+    third = frame()
+    after = raven::capture(game.window)
+    # A second upload of the same map changes nothing further, so a third
+    # frame must differ from the second only if the city moved: the check is
+    # that the first draw put something there.
+    map_kind = raven::widget::Rwidget_get_type(game.map.id)
+    is_image = if map_kind == raven::widget::R_WIDGET_IMAGE:
+        1
+    else:
+        0
+    drawn = if changed(before, after):
+        1
+    else:
+        0
+    raven::stop()
+    ["the frame is ".concat(std::int::to_string(after.width)).concat(" by ").concat(std::int::to_string(after.height)), "the map is an image widget ".concat(std::int::to_string(is_image)), "the first draw changed the window ".concat(std::int::to_string(drawn))]
+
+result = main():
+    on raven::RavenFailed failure:
+        ["Raven did not start", failure.detail]
+    on NonFiniteFloat:
+        ["not a number"]
+result

@@ -128,6 +128,9 @@ redrawn only when the city or the pointer's tile changes.
 | a real X11 window opens and the frame loop runs | yes, run: the process stays alive with the window open until the timeout kills it |
 | the window, driven with synthetic input, builds on a click | yes, run: `gametest.bot` |
 | the pointer aims at every tile of the map | yes, run: the map's four corners are read back on it |
+| the map is actually drawn, not blank | yes, run: `sight.bot` reads the window's pixels back on the real
+  renderer and the first draw changes them. With the bug reintroduced the same
+  program answers 0, so the check has teeth |
 | the window, driven by a human hand | not run |
 | the game's advance while the player is idle | yes: a timer ticks every tenth of
   a second, and 40 headless frames of the loop's own `month` advance 8 simulated
@@ -145,6 +148,11 @@ redrawn only when the city or the pointer's tile changes.
   four corners of the map and answers 1111 (every one of them is on the map's
   viewport) -- and the map is now 416 by 304, so its tiles are squares rather
   than the 416 by 486 rectangles it drew before.
+* **The map vanished entirely.** Holding the map's aspect ratio meant putting it
+  in a size box, and `Game.map` was pointed at the *box*; the texture was then
+  uploaded into a container that is not an image, so it drew nothing and the
+  map's area was blank. The box now wraps only the palette, and `Game.map` is
+  the image widget again.
 * **The inspect tool never said anything.** `Tool::Inspect` was handed to
   `simcity::actions::place`, where it is not a line tool or a zone tool, so it
   fell through to the zone branch and was refused as "the ground is not

@@ -24,8 +24,9 @@ from another language.
       toolbar.bot         the palette of tools
       words.bot           the figures of a city, as the labels on the screen read
       app.bot             the window, the controls, and the loop that runs both
-    tests.bot             the headless suite (37 cases)
+    tests.bot             the headless suite (38 cases)
     gametest.bot          the windowed game, exercised with no display
+    sight.bot             the map is drawn, checked on the real renderer
     bench.bot             the deterministic performance report
     tools/                order.py, dedupe.py: helpers used while writing the sources
                           (a module's top level is ordered callee-first, and the
@@ -76,11 +77,15 @@ and nothing is served; tax to the maximum and what you built walks away.
 
     ./botlish-linux-x86_64 -backend cranelift tests.bot     # the model, 37 cases
     ./botlish-linux-x86_64 -backend cranelift gametest.bot  # the window, no display
+    ./botlish-linux-x86_64 -backend cranelift sight.bot     # the map, on the real renderer
     ./botlish-linux-x86_64 -backend cranelift bench.bot     # the performance report
 
 `tests.bot` prints PASS or FAIL per case and a count. `gametest.bot` drives the
 same window headlessly and prints the map's size, whether all four corners of
-the map are reachable, what a click spent, and what the inspector says. `bench.bot` prints the map's size, how
+the map are reachable, what a click spent, and what the inspector says.
+`sight.bot` needs the real renderer (a display and Mesa's software Vulkan driver
+are enough) and answers whether the map's first draw changed the window's
+pixels: with the texture going into a widget that is not an image, it answers 0. `bench.bot` prints the map's size, how
 much of it is developed, and how long a thousand months took.
 
 ## What is implemented, what is not

@@ -18,6 +18,7 @@ import std::float64
 import std::int
 import std::list
 import std::str
+import raven::widget
 import raven::window
 import simcity::app
 import simcity::city
@@ -112,8 +113,15 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
     read_tile = simcity::app::read_mouse(looking)
     told = frames(4)
     note = simcity::app::state(read_tile).message
+    # The map must be an image widget: the texture is uploaded into one, and a
+    # container in its place takes the upload silently and draws nothing.
+    kind = raven::widget::Rwidget_get_type(game.map.id)
+    drawn = if kind == raven::widget::R_WIDGET_IMAGE:
+        1
+    else:
+        0
     raven::stop()
-    ["the map is ".concat(std::int::to_string(wide)).append_char(',').append_char(' ').concat(std::int::to_string(tall)), "corners reachable ".concat(std::int::to_string(corners)), "spent ", std::int::to_string(spent), "roads in the viewport ".concat(std::int::to_string(roads)), "the inspector says: ".concat(note)]
+    ["the map is ".concat(std::int::to_string(wide)).append_char(',').append_char(' ').concat(std::int::to_string(tall)), "corners reachable ".concat(std::int::to_string(corners)), "spent ", std::int::to_string(spent), "roads in the viewport ".concat(std::int::to_string(roads)), "the inspector says: ".concat(note), "the map is an image widget ".concat(std::int::to_string(drawn))]
 
 result = main():
     on raven::RavenFailed failure:

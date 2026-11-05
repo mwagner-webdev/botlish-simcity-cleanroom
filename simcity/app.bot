@@ -277,18 +277,14 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
     demand = raven::hbox().add(want_r).add(want_c).add(want_i)
     map = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_IMAGE)}
     map.id.Rwidget_set_size(screen_width(), screen_height())
-    # The map sits in a box that holds its size: a map stretched to the panel's
-    # height would draw its tiles as rectangles rather than squares.
-    map_box = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_SIZE_BOX)}
-    map_box.add(map)
-    map_box.id.Rwidget_set_size(screen_width(), screen_height())
     sides = simcity::toolbar::column()
-    # The palette is held to the map's height too, so the row beside the map
-    # is not taller than it and the map is not stretched to match.
+    # The palette is held to the map's height, so the row beside the map is not
+    # taller than it and the map is not stretched to match (which would draw
+    # its tiles as rectangles rather than squares).
     tool_box = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_SIZE_BOX)}
     tool_box.add(sides)
     tool_box.id.Rwidget_set_size(std::float64::from_int(TOOL_WIDE), screen_height())
-    body = raven::hbox().add(map_box).add(tool_box)
+    body = raven::hbox().add(map).add(tool_box)
     lower = raven::hbox().add(note).add(tax)
     column = raven::vbox().add(top).add(demand).add(body).add(lower)
     window.set_content(column)
@@ -309,7 +305,7 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
         state: std::mutable_array::create(1, started),
         clock: raven::timer(0.1, true),
         window: window,
-        map: map_box,
+        map: map,
         funds: funds,
         people: people,
         jobs: jobs,
