@@ -7,7 +7,8 @@ What was compiled, what was run, and what it did.
 | file | what it is | result |
 |---|---|---|
 | `simcity.bot` | the windowed game | compiles on `cranelift`; a real X11 window opens and the frame loop runs |
-| `tests.bot` | the model, 37 cases | compiles; **37 passed, 0 failed** |
+| `tests.bot` | the city, 38 cases | compiles; **38 passed, 0 failed** |
+| `labels.bot` | the letters on the map, 6 cases | compiles; **6 passed, 0 failed** |
 | `gametest.bot` | the window, no display | compiles; all four figures printed and correct |
 | `bench.bot` | the performance report | compiles; the figures below printed |
 
@@ -18,7 +19,7 @@ was being written.
 
 ## What the tests assert
 
-The 37 cases cover, in the order the model's own test file lists them:
+The 38 cases cover, in the order the model's own test file lists them:
 
 * **construction and spending** -- a road costs what the palette says; a zone
   is its whole 3 by 3; a second zone cannot overlap the first; a road and a
@@ -81,8 +82,8 @@ renderer draws nothing and no frame is uploaded:
     residents 1260
     funds 88,725
     months advanced 1400
-    1000 months took 18,470 ms
-    one month takes 18,470 microseconds      18.5 ms a month
+    1000 months took 20,848 ms
+    one month takes 20,848 microseconds      20.8 ms a month
 
 The town holds 27 developed tiles out of 2304 -- a deliberately small
 developed city, because the requirement is a *representative* developed city and
@@ -113,8 +114,8 @@ real but worth a fifth of that.
 
 ### What this means for play
 
-18 ms a month is 2% of the CPU at the game's normal speed (a month every half a
-second) and 18% at rush (a month every tenth of a second). Rendering is extra
+21 ms a month is 4% of the CPU at the game's normal speed (a month every half a
+second) and 21% at rush (a month every tenth of a second). Rendering is extra
 and separate: a whole viewport of 26 by 19 tiles is 331,776 bytes of texture,
 redrawn only when the city or the pointer's tile changes.
 
@@ -123,7 +124,15 @@ redrawn only when the city or the pointer's tile changes.
 | claim | status |
 |---|---|
 | the model compiles | yes |
-| the model's 37 tests pass | yes, run |
+| the city's 38 tests pass | yes, run |
+| the map's letters carry a letter, and are drawn | yes, run: `labels.bot`, 6
+  cases, including one that renders one tile alone and counts its pixels of
+  label ink. With the glyph guard weakened the same case fails, so it has
+  teeth |
+| every control of the palette is inside the window | yes, run:
+  `gametest.bot` reads the palette's bottom edge back and compares it with the
+  window's height, answering 1. Shrink the window below the palette and the
+  same program answers 0 |
 | the window compiles | yes |
 | a real X11 window opens and the frame loop runs | yes, run: the process stays alive with the window open until the timeout kills it |
 | the window, driven with synthetic input, builds on a click | yes, run: `gametest.bot` |
@@ -137,7 +146,7 @@ redrawn only when the city or the pointer's tile changes.
   months, which is the tempo set |
 | the game's own frame loop, complete | not exercised to the end |
 
-## Two defects found by driving the window, and fixed
+## Defects found by driving the window, and fixed
 
 * **The cursor could only reach the map's diagonal.** `simcity::screen`'s
   `mouse_at` passed the same C pointer as both out-parameters of
@@ -151,8 +160,11 @@ redrawn only when the city or the pointer's tile changes.
 * **The map vanished entirely.** Holding the map's aspect ratio meant putting it
   in a size box, and `Game.map` was pointed at the *box*; the texture was then
   uploaded into a container that is not an image, so it drew nothing and the
-  map's area was blank. The box now wraps only the palette, and `Game.map` is
-  the image widget again.
+  map's area was blank. The map and the palette now each sit in their own size
+  box, and `Game.map` names the image widget inside the map's box -- which is
+  both the widget the texture goes into and the widget whose rect the pointer
+  is aimed at. `gametest.bot` asserts the kind, and `sight.bot` still answers 1
+  after the wrapping.
 * **The inspect tool never said anything.** `Tool::Inspect` was handed to
   `simcity::actions::place`, where it is not a line tool or a zone tool, so it
   fell through to the zone branch and was refused as "the ground is not
@@ -160,6 +172,28 @@ redrawn only when the city or the pointer's tile changes.
   (`simcity::words::show_tile`), which says what stands on the tile, its zone
   level, and the four conditions that decide its future: power, road access,
   smoke, crime and worth.
+* **The window opened too small and the palette's lower half was unreachable.**
+  The window was 940 by 460, holding a map 416 by 304 over a palette whose
+  natural height was 486: a column of twenty controls in a 304-point slot is
+  laid out below the window's bottom edge, so it is never drawn and can never
+  be clicked. The palette is now three short columns (208 points tall), the
+  window is 940 by 560, and `gametest.bot` reads the palette's bottom edge back
+  and answers 1 -- it answers 0 with the window shrunk below the palette, so
+  the check has teeth.
+* **Nothing on the map could be read without inspecting it.** A zone block at
+  level 0 is one flat colour, and a coal plant and a nuclear plant were two
+  more. The map's tiles now each carry a single letter (R, C, I, P, N, O, F, K),
+  drawn from a five by five bitmap font built in the renderer, with the key on
+  the palette. `labels.bot` tests it: a residential tile carries a letter, a
+  road carries none, and a tile rendered on its own carries exactly as many
+  pixels of label ink as its letter sets.
+* **The letters leaked off their tile.** The first version of the glyph
+  read its pixel by naming a bit position and guarding only that position, so
+  a pixel one row or one column outside the letter's box could still be read:
+  the R tile drew 23 pixels of label ink instead of its glyph's 14, and the
+  rows were read the wrong way up. `labels.bot`'s ink count caught it. The guard
+  is now on the row and the column themselves, and the letters print the right
+  way up.
 
 ## What is not done
 
@@ -177,3 +211,8 @@ redrawn only when the city or the pointer's tile changes.
   palette's buttons are named by the chosen tool's message instead.
 * **Traffic as a number the player can see.** It exists only as the congestion
   term in land value. The status line does not carry a traffic figure.
+* **Only eight kinds of object are labelled.** The letter is drawn for the three
+  zones, the two plants, the police, the fire station and the park. A road, a
+  rail and a wire carry none, because their shape and colour already say which
+  they are; the letter table (`simcity/render.bot`'s `glyph`) has room for more
+  letters, and none of the others is drawn.

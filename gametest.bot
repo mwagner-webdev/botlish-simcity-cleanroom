@@ -120,8 +120,22 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
         1
     else:
         0
+    # The palette must fit inside the window. A control laid out below the
+    # window's bottom edge is never drawn and can never be clicked, so the
+    # window is measured and the palette's own bottom edge is compared with it:
+    # a palette that wants more room than the map's row has overflows the
+    # window, and its lower controls are unreachable.
+    window_size = raven::size(game.window):
+        on NonFiniteFloat:
+            raven::Size {width: 0, height: 0}
+    tools = at(game.tools)
+    tools_bottom = whole(tools.y) + whole(tools.height)
+    fits = if tools_bottom <= window_size.height:
+        1
+    else:
+        0
     raven::stop()
-    ["the map is ".concat(std::int::to_string(wide)).append_char(',').append_char(' ').concat(std::int::to_string(tall)), "corners reachable ".concat(std::int::to_string(corners)), "spent ", std::int::to_string(spent), "roads in the viewport ".concat(std::int::to_string(roads)), "the inspector says: ".concat(note), "the map is an image widget ".concat(std::int::to_string(drawn))]
+    ["the map is ".concat(std::int::to_string(wide)).append_char(',').append_char(' ').concat(std::int::to_string(tall)), "corners reachable ".concat(std::int::to_string(corners)), "spent ", std::int::to_string(spent), "roads in the viewport ".concat(std::int::to_string(roads)), "the inspector says: ".concat(note), "the map is an image widget ".concat(std::int::to_string(drawn)), "the palette fits the window ".concat(std::int::to_string(fits))]
 
 result = main():
     on raven::RavenFailed failure:

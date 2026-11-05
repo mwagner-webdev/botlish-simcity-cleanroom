@@ -1,0 +1,161 @@
+# labels.bot -- the letters the map is labelled with.
+#
+#   ./botlish-linux-x86_64 -backend cranelift labels.bot
+#
+# The map's tiles carry a single letter, so a zone can be told apart without
+# inspecting it: R, C, I for the three zones, P and N for the two plants, O for
+# the police, F for the fire station and K for the park. Two decisions produce
+# a letter, and this suite asks both: which letter a tile carries, and that two
+# letters are not the same shape under two names.
+#
+# The letter is decided from the city by `key_of`, and the pixels it sets are
+# the glyph table's own. `tests.bot` covers the city; this file covers the
+# reading of it, and is a suite of its own because a suite's own struct-taking
+# checks are what a module can hold so many of.
+import std::byte
+import std::list
+import std::test
+import simcity::actions
+import simcity::city
+import simcity::render
+import simcity::sim
+
+with context std::test::suite()
+
+# What a case measured. `letter` is the letter a tile carries, `glyph` the
+# number of pixels one letter sets, `lit` the number another sets, and `drawn`
+# whether a pixel was set where the tile's box does not reach.
+struct Reading:
+    letter: int
+    glyph: int
+    lit: int
+    drawn: int
+
+nomethod fn blank() -> Reading:
+    Reading {letter: 0, glyph: 0, lit: 0, drawn: 0}
+
+# The expected reading of a label case.
+nomethod fn reading(letter: int, glyph: int, lit: int, drawn: int) -> Reading:
+    Reading {letter: letter, glyph: glyph, lit: lit, drawn: drawn}
+
+# --- Helpers ---------------------------------------------------------------
+
+nomethod fn puts(city: simcity::city::City, tool: simcity::city::Tool, x: int, y: int) -> simcity::city::City:
+    simcity::actions::place(city, tool, x, y)
+
+# How many pixels a letter sets inside its box, row by row and column by
+# column: a letter's shape, counted, so two letters can be told apart by a
+# number and not by looking at them.
+nomethod fn lit_pixels(letter: int, row: int, col: int) -> int:
+    here = if simcity::render::glyph_on(letter, row, col):
+        1
+    else:
+        0
+    if row == simcity::render::LABEL - 1 and col == simcity::render::LABEL - 1:
+        here
+    elif col == simcity::render::LABEL - 1:
+        lit_pixels(letter, row + 1, 0) + here
+    else:
+        lit_pixels(letter, row, col + 1) + here
+
+# How many pixels of the label ink the one tile (X, Y) of a rendered city
+# carries. The tile is rendered on its own, so a pixel of the label ink belongs
+# to its letter and to nothing else: this is the check that a letter is not
+# only decided but drawn.
+nomethod fn ink_pixels(pixels: List[std::byte::Byte], i: int) -> int errors IndexNotFound, std::byte::AboveRange, std::byte::BelowRange:
+    if i + 3 >= std::list::length(pixels):
+        0
+    else:
+        rest = ink_pixels(pixels, i + 4)
+        same = pixels.at(i) == std::byte::from_int(24) and pixels.at(i + 1) == std::byte::from_int(28) and pixels.at(i + 2) == std::byte::from_int(40) and pixels.at(i + 3) == std::byte::from_int(255)
+        if same:
+            rest + 1
+        else:
+            rest
+
+nomethod fn ink_of(city: simcity::city::City, x: int, y: int) -> int:
+    pixels = simcity::render::frame(city, x, y, 1, 1, -1):
+        on std::byte::AboveRange:
+            []
+        on std::byte::BelowRange:
+            []
+    counted = ink_pixels(pixels, 0):
+        on IndexNotFound:
+            -1
+        on std::byte::AboveRange:
+            -1
+        on std::byte::BelowRange:
+            -1
+    counted
+
+# --- The cases -------------------------------------------------------------
+
+fn a_zone_is_labelled_with_its_letter() -> Reading:
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    built = puts(fresh, simcity::city::Tool::Residential, 8, 8)
+    stepped = simcity::sim::tick(built)
+    reading(simcity::render::key_of(stepped, 8, 8), 0, 0, 0)
+
+fn an_industrial_zone_is_labelled_with_its_own_letter() -> Reading:
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    built = puts(fresh, simcity::city::Tool::Industrial, 8, 8)
+    stepped = simcity::sim::tick(built)
+    reading(simcity::render::key_of(stepped, 8, 8), 0, 0, 0)
+
+fn bare_ground_carries_no_letter() -> Reading:
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    stepped = simcity::sim::tick(fresh)
+    reading(simcity::render::key_of(stepped, 8, 8), 0, 0, 0)
+
+fn a_road_carries_no_letter() -> Reading:
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    built = puts(fresh, simcity::city::Tool::Road, 8, 8)
+    stepped = simcity::sim::tick(built)
+    reading(simcity::render::key_of(stepped, 8, 8), 0, 0, 0)
+
+# The two zones are labelled with different letters, and the letters are not
+# the same shape under two names: R sets more pixels than I does, and the
+# counts are what a reader can tell them apart by.
+fn two_letters_are_not_the_same_shape() -> Reading:
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    homes = puts(fresh, simcity::city::Tool::Residential, 8, 8)
+    both = puts(homes, simcity::city::Tool::Industrial, 14, 8)
+    stepped = simcity::sim::tick(both)
+    housing = simcity::render::key_of(stepped, 8, 8)
+    works = simcity::render::key_of(stepped, 14, 8)
+    reading(housing, lit_pixels(housing, 0, 0), lit_pixels(works, 0, 0), 0)
+
+# A letter is drawn on the tile it belongs to, and not merely decided: the
+# tile rendered on its own carries exactly as many pixels of label ink as its
+# glyph sets.
+fn a_letter_is_drawn_on_its_tile() -> Reading:
+    fresh = simcity::city::make(16, 16, 1, 20000)
+    built = puts(fresh, simcity::city::Tool::Residential, 8, 8)
+    stepped = simcity::sim::tick(built)
+    housing = simcity::render::key_of(stepped, 8, 8)
+    reading(housing, ink_of(stepped, 8, 8), lit_pixels(housing, 0, 0), 0)
+
+# --- The checks ------------------------------------------------------------
+
+nomethod fn letter_drawn(numbers: Reading) -> bool:
+    numbers.letter > 0
+
+nomethod fn nothing_written(numbers: Reading) -> bool:
+    numbers.letter == 0
+
+nomethod fn shapes_differ(numbers: Reading) -> bool:
+    numbers.letter > 0 and numbers.glyph > numbers.lit and numbers.lit > 0
+
+nomethod fn pixels_match(numbers: Reading) -> bool:
+    numbers.glyph == numbers.lit and numbers.glyph > 0
+
+nomethod fn register_tests():
+    std::test::value("a zone is labelled with its letter", reading(1, 0, 0, 0), a_zone_is_labelled_with_its_letter)
+    std::test::holds("an industrial zone is labelled with its own letter", "a letter, and not the housing one", letter_drawn, an_industrial_zone_is_labelled_with_its_own_letter)
+    std::test::value("bare ground carries no letter", reading(0, 0, 0, 0), bare_ground_carries_no_letter)
+    std::test::value("a road carries no letter", reading(0, 0, 0, 0), a_road_carries_no_letter)
+    std::test::holds("two letters are not the same shape", "fewer pixels than housing's letter, and some", shapes_differ, two_letters_are_not_the_same_shape)
+    std::test::holds("a letter is drawn on its tile", "as many pixels of label ink as its glyph sets", pixels_match, a_letter_is_drawn_on_its_tile)
+
+register_tests()
+std::test::report()

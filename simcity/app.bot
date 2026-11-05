@@ -43,7 +43,7 @@ ACROSS = 26
 DOWN = 19
 TILE_PX = 16
 # The palette's width in screen pixels.
-TOOL_WIDE = 320
+TOOL_WIDE = 500
 
 # How fast the city runs: a choice of simulated month per timer tick. A tick
 # of the timer is a tenth of a second, so "month" is a month every half a
@@ -72,6 +72,7 @@ struct Game:
     state: MutableArray[State]
     window: raven::Window
     map: raven::Widget
+    tools: raven::Widget
     funds: raven::Widget
     people: raven::Widget
     jobs: raven::Widget
@@ -261,7 +262,7 @@ nomethod fn with_cursor(game: Game, cursor_x: int, cursor_y: int, held: bool) ->
 # --- The window ------------------------------------------------------------
 
 nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
-    window = raven::window("SimCity", 940, 460)
+    window = raven::window("SimCity", 940, 560)
     funds = raven::label(simcity::words::show_funds(city))
     people = raven::label(simcity::words::show_people(city))
     jobs = raven::label(simcity::words::show_jobs(city))
@@ -277,14 +278,20 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
     demand = raven::hbox().add(want_r).add(want_c).add(want_i)
     map = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_IMAGE)}
     map.id.Rwidget_set_size(screen_width(), screen_height())
+    # The map sits in a box that holds its own size, so the row beside it can
+    # never stretch it into rectangles rather than squares. The image itself
+    # stays what Game.map names: it is the image that the texture is uploaded
+    # into and whose rect the pointer is aimed at.
+    map_box = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_SIZE_BOX)}
+    map_box.add(map)
+    map_box.id.Rwidget_set_size(screen_width(), screen_height())
     sides = simcity::toolbar::column()
-    # The palette is held to the map's height, so the row beside the map is not
-    # taller than it and the map is not stretched to match (which would draw
-    # its tiles as rectangles rather than squares).
+    # The palette is held to its own height too, and it is shorter than the map,
+    # so neither pushes the other about.
     tool_box = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_SIZE_BOX)}
     tool_box.add(sides)
     tool_box.id.Rwidget_set_size(std::float64::from_int(TOOL_WIDE), screen_height())
-    body = raven::hbox().add(map).add(tool_box)
+    body = raven::hbox().add(map_box).add(tool_box)
     lower = raven::hbox().add(note).add(tax)
     column = raven::vbox().add(top).add(demand).add(body).add(lower)
     window.set_content(column)
@@ -306,6 +313,7 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
         clock: raven::timer(0.1, true),
         window: window,
         map: map,
+        tools: sides,
         funds: funds,
         people: people,
         jobs: jobs,

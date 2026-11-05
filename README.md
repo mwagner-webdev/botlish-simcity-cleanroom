@@ -24,7 +24,8 @@ from another language.
       toolbar.bot         the palette of tools
       words.bot           the figures of a city, as the labels on the screen read
       app.bot             the window, the controls, and the loop that runs both
-    tests.bot             the headless suite (38 cases)
+    tests.bot             the headless suite for the city (38 cases)
+    labels.bot            the headless suite for the letters on the map (6 cases)
     gametest.bot          the windowed game, exercised with no display
     sight.bot             the map is drawn, checked on the real renderer
     bench.bot             the deterministic performance report
@@ -63,6 +64,9 @@ A standalone executable beside the program:
 | build | click the map; drag to run a road or a line |
 | move the view | arrow keys |
 | follow the pointer | the tile under it is drawn as a pale preview |
+| read a tile without inspecting it | the single letter it carries: R, C, I the
+  zones, P and N the power plants, O police, F fire, K park. The key is on the
+  palette |
 | set the tax rate | the spin box at the bottom |
 | see the budget | the Budget button: taxes, upkeep, balance |
 | pause, march, rush | the three buttons on the right |
@@ -75,14 +79,20 @@ and nothing is served; tax to the maximum and what you built walks away.
 
 ## Testing
 
-    ./botlish-linux-x86_64 -backend cranelift tests.bot     # the model, 37 cases
+    ./botlish-linux-x86_64 -backend cranelift tests.bot     # the city, 38 cases
+    ./botlish-linux-x86_64 -backend cranelift labels.bot    # the map's letters, 6 cases
     ./botlish-linux-x86_64 -backend cranelift gametest.bot  # the window, no display
     ./botlish-linux-x86_64 -backend cranelift sight.bot     # the map, on the real renderer
     ./botlish-linux-x86_64 -backend cranelift bench.bot     # the performance report
 
-`tests.bot` prints PASS or FAIL per case and a count. `gametest.bot` drives the
-same window headlessly and prints the map's size, whether all four corners of
-the map are reachable, what a click spent, and what the inspector says.
+`tests.bot` prints PASS or FAIL per case and a count, and so does `labels.bot`.
+`gametest.bot` drives the same window headlessly and prints the map's size,
+whether all four corners of the map are reachable, what a click spent, what the
+inspector says, that the map is an image widget, and that the palette's bottom
+edge is inside the window -- a control laid out below the window is never
+drawn and can never be clicked, so a palette that overflows its row makes its
+lower half unreachable. Shrink the window below the palette and that figure
+answers 0, so the check has teeth.
 `sight.bot` needs the real renderer (a display and Mesa's software Vulkan driver
 are enough) and answers whether the map's first draw changed the window's
 pixels: with the texture going into a widget that is not an image, it answers 0. `bench.bot` prints the map's size, how

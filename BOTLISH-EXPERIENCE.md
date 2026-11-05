@@ -160,6 +160,26 @@ and `-help std::mutable_array::copy` answered the two questions I asked most.
 * **`compilerpedia` does not know a project's own symbols.** `-help simcity::sim::tick`
   answers "no Compilerpedia topic matches". For a program of eleven modules that
   leaves cross-references as plain comments.
+* **A module can only hold so many test cases, and nothing says where the wall
+  is.** `tests.bot` has 38 cases and would not take a 39th. The compiler's
+  answer is `"check_16" has typed parameter requirements that cannot be
+  preserved passed as an ordinary call argument` and it names whichever case
+  happens to sit at the wall, not the count that was reached. Reusing a function
+  costs nothing, so 38 cases that share their checks fit and a 39th with a check
+  of its own does not; splitting the registration across two functions does not
+  help either, because the budget is the module's. The fix is what any test file
+  eventually does anyway: `labels.bot` is the renderer's own suite, and it holds
+  6 cases with room to spare. I found the wall by walking into it.
+* **A loop's bounds are exclusive of the upper number, and nothing says so.**
+  `loop i from 0 to 1000` runs 1000 times, which is what a reader expects, but
+  the frame renderer's `loop py from 0 to TILE * down` is what a reader does not
+  expect: it produces `TILE * down` rows, and the texture is uploaded at
+  `4 * width * height` bytes, so the two only agree because the reader guessed
+  right. A sentence in the guide would have saved the guessing.
+* **`std::str::length` is not `List::length`.** `pixels.length()` on a list
+  answers a type error naming `std::str::length`, and the list's own measure is
+  `std::list::length(pixels)`. Two functions with the same name and neither is
+  the one a reader reaches for first.
 
 ## 7. The bug that reads like a language bug and is not
 
@@ -217,13 +237,19 @@ system cannot see, and the bug in section 7 was exactly a well-typed call.
 * `NATIVE-ONLY` for `interp` on a C call: documented, and correct.
 * The verbosity of error clauses: the design is deliberate and the compile-time
   checking is real.
+* The `SAME-RETURN-VALUE` and `METHOD-ELIGIBLE` warnings: both are style and
+  both are suppressed by writing the style, so they cost nothing in the end.
 
 ## 11. Numbers from this session
 
 | measurement | value |
 |---|---|
-| lines of Botlish in `simcity/` and the four entry programs | about 3,600 |
+| lines of Botlish in `simcity/` and the five entry programs | about 3,700 |
 | modules | 11 |
 | first working headless simulation | the afternoon of day one |
 | the whole simulation, once the sweep direction was fixed | 21 ms a month on 48 by 48 |
-| test cases | 37, all passing |
+| test cases | 44 (38 for the city, 6 for the map's letters), all passing |
+| defects found by a test written after the fact | 2, both in the new label
+  drawing: the glyph guard leaked pixels outside the letter's box, and the rows
+  were read the wrong way up. Neither was visible in the headless figure, and
+  both were visible the moment a case counted the pixels |

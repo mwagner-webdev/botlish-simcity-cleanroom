@@ -1,37 +1,29 @@
 # simcity::toolbar -- the palette of tools, as buttons.
-
 #
-
-# Each button carries a named action ("tool.road", "tempo.rush", "budget",
-
-# ...) and the game's loop reads those names. That is Raven's own mechanism
-
-# for a control the program must recognise without knowing which widget it
-
-# was, and it means this module does not have to hand a handle back for the
-
-# game to compare against an event.
-
+# Each button carries a named action ("tool.road", "tempo.rush", "budget")
+# and the game's loop reads those names. That is Raven's own mechanism for a
+# control the program must recognise without knowing which widget it was, and
+# it means this module does not have to hand a handle back for the game to
+# compare against an event.
+#
+# The palette is three short columns side by side. A control is only clickable
+# where the window draws it, and Raven lays a child out inside its parent's
+# slot: a column of twenty controls was 486 points tall in a 304-point slot,
+# so its bottom half was unreachable. Three columns of at most eight controls
+# are shorter than the slot, and the game's own test reads the palette's rect
+# back to prove it.
 import type simcity::city::Tool
-
 import raven
 import std::str
-
 import simcity::city
-
 import simcity::words
 
 # One button that fires the named action.
-
-# One button that fires the named action.
-
 nomethod fn action(text: str, name: str) -> raven::Widget:
     made = raven::button(text)
     made.set_action(name)
     made
 
-# One button that fires the named action.
-# One button that fires the named action.
 nomethod fn name_of(tool: Tool) -> str:
     if tool == Tool::Road:
         "road"
@@ -66,9 +58,22 @@ nomethod fn name_of(tool: Tool) -> str:
 nomethod fn tool(tool: Tool) -> raven::Widget:
     action(simcity::words::show_tool(tool).concat("  ").concat(simcity::words::show_cost(tool)), "tool.".concat(name_of(tool)))
 
-# The palette, and the things that are not tools at all.
+# The tools that draw on the ground.
+nomethod fn grounds() -> raven::Widget:
+    raven::vbox().add(tool(Tool::Road)).add(tool(Tool::Wire)).add(tool(Tool::Rail)).add(tool(Tool::Residential)).add(tool(Tool::Commercial)).add(tool(Tool::Industrial)).add(tool(Tool::Bulldoze)).add(action("Inspect", "tool.inspect"))
+
+# The tools that are built rather than drawn, and the key the map is labelled
+# with: the letters stand for what is on the tile.
+nomethod fn built() -> raven::Widget:
+    tools = raven::vbox().add(tool(Tool::Coal)).add(tool(Tool::Nuclear)).add(tool(Tool::Police)).add(tool(Tool::Fire)).add(tool(Tool::Park)).add(raven::label("Key: R C I zones")).add(raven::label("P N power plants")).add(raven::label("O police F fire"))
+    tools.add(raven::label("K park"))
+
+# How fast the city runs, and the two things the player opens.
+nomethod fn others() -> raven::Widget:
+    tempos = raven::hbox().add(action("Pause", "tempo.pause")).add(action("Month", "tempo.month")).add(action("Rush", "tempo.rush"))
+    raven::vbox().add(tempos).add(action("Budget", "budget")).add(action("New town", "new")).add(raven::label("Click to build, drag")).add(raven::label("to run a line, arrow")).add(raven::label("keys move the view."))
+
+# The palette: three columns beside each other, so no column is deeper than
+# the map is tall.
 nomethod fn column() -> raven::Widget:
-    tools = raven::vbox().add(tool(Tool::Road)).add(tool(Tool::Wire)).add(tool(Tool::Rail)).add(tool(Tool::Residential)).add(tool(Tool::Commercial)).add(tool(Tool::Industrial)).add(tool(Tool::Coal)).add(tool(Tool::Nuclear)).add(tool(Tool::Police)).add(tool(Tool::Fire)).add(tool(Tool::Park)).add(tool(Tool::Bulldoze)).add(action("Inspect", "tool.inspect"))
-    tempos = raven::vbox().add(action("Pause", "tempo.pause")).add(action("Month", "tempo.month")).add(action("Rush", "tempo.rush"))
-    others = raven::vbox().add(tempos).add(action("Budget", "budget")).add(action("New town", "new")).add(raven::label("Click to build, drag to run a line, arrow keys move the view."))
-    raven::vbox().add(tools).add(others)
+    raven::hbox().add(grounds()).add(built()).add(others())

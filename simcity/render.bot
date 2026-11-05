@@ -1,34 +1,183 @@
 # simcity::render -- the city as pixels.
+
 #
+
 # The map is drawn into one RGBA byte list which the game's screen uploads as
+
 # a texture: TILE texture pixels to a side for every map tile, so a whole
+
 # viewport is one list of bytes and redrawing one tile is redrawing one tile.
-# Four texture pixels per tile is enough for a readable 4 by 4 block at 1989's
-# level of detail, and it keeps the whole redraw of a developed viewport well
-# inside a tenth of a second of Botlish work.
+
+# Eight texture pixels per tile is enough room for the single letter that says
+
+# what the object is, which is the whole point of the size: a 3 by 3 zoning
+
+# block has no room for a word, but it has room for R, C, I, P, N, O, F or K.
+
 #
+
+# The letters are a five by five bitmap font drawn here as pixel patterns:
+
+# the game has no font to draw with inside a texture, and a letter made of
+
+# pixels is the same weight of work as a letter drawn by a library.
+
+#
+
 # A frame is built with collecting loops, because Botlish has no list
+
 # concatenation: each loop collects its own rows, and the loops are nested so
+
 # that the outermost one collects whole texture-pixel rows of the viewport.
+
 #
+
 # A colour is a packed integer, red in the high byte and blue in the low,
+
 # because a module-level binding may not construct a struct -- a constant in
+
 # Botlish is a number or a string, never a value of its own making.
+
 import std::byte
+
 import std::float64
+
 import std::list
+
 import type simcity::city::Tool
+
 import simcity::city
 
-# Texture pixels per map tile.
+
 
 # Texture pixels per map tile.
 
 # Texture pixels per map tile.
-# Texture pixels per map tile.
-TILE = 4
 
-# --- The palette -----------------------------------------------------------
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+# Texture pixels per map tile.
+TILE = 8
+
+# The side of a label's box inside a tile, and where the box begins.
+LABEL = 5
+
+LABEL_AT = 1
+
+#
+# A number per letter, so the glyph table is a list of lists rather than a
+# switch over strings.
+LETTER_R = 1
+
+LETTER_C = 2
+
+LETTER_I = 3
+
+LETTER_P = 4
+
+LETTER_N = 5
+
+LETTER_O = 6
+
+LETTER_F = 7
+
+LETTER_K = 8
+
+# The letter a zoning category or a building is labelled with, and zero for
+# the ground: one exit per answer, so the reader follows one decision.
+nomethod fn letter_of(kind: int) -> int:
+    if kind == simcity::city::RES:
+        LETTER_R
+    elif kind == simcity::city::COM:
+        LETTER_C
+    elif kind == simcity::city::IND:
+        LETTER_I
+    elif kind == simcity::city::COAL:
+        LETTER_P
+    elif kind == simcity::city::NUCLEAR:
+        LETTER_N
+    elif kind == simcity::city::POLICE:
+        LETTER_O
+    elif kind == simcity::city::FIRE:
+        LETTER_F
+    elif kind == simcity::city::PARK:
+        LETTER_K
+    else:
+        0
+
+# The letter each map object is labelled with, and zero where the object is
+# read by its shape instead: the ground, the roads and the wires are what a
+# player already tells apart by colour.
+nomethod fn key_of(city: simcity::city::City, x: int, y: int) -> int:
+    if simcity::city::road_at(city, x, y) != 0 or simcity::city::rail_at(city, x, y) != 0 or simcity::city::wire_at(city, x, y) != 0:
+        0
+    else:
+        letter_of(simcity::city::zone_at(city, x, y))
+
+# Each glyph is its five rows of five bits packed into one integer, the top
+# row in the high bits and each row's leftmost pixel in its highest bit: the
+# letter's pixel (COL, ROW) is set when the bit
+# (LABEL - 1 - ROW) * LABEL + LABEL - 1 - COL of the glyph is set. One integer
+# a letter is one value to compare, and the box's bounds are one guard.
+nomethod fn glyph(letter: int) -> int:
+    if letter == LETTER_R:
+        32045713
+    elif letter == LETTER_C:
+        15254062
+    elif letter == LETTER_I:
+        14815374
+    elif letter == LETTER_P:
+        32045584
+    elif letter == LETTER_N:
+        18667121
+    elif letter == LETTER_O:
+        15255086
+    elif letter == LETTER_F:
+        33061392
+    else:
+        18444881
+
+# WHETHER the glyph's pixel (COL, ROW) is drawn. The row and the column are
+# bounded here and not only the bit they name: a letter is drawn in its box and
+# a pixel outside the box sets nothing, or the letter at the edge of a tile
+# would be read onto the tile beside it.
+nomethod fn glyph_on(letter: int, row: int, col: int) -> bool:
+    if row < 0 or row >= LABEL or col < 0 or col >= LABEL:
+        false
+    else:
+        place = (LABEL - 1 - row) * LABEL + LABEL - 1 - col
+        bit_and(glyph(letter).shift_right(place), 1) == 1
+
 #
 # Every colour here is made up for this game. The greens and greys of the
 # ground, the blue of the roads, the yellow of the wires: the map reads by hue,
@@ -69,7 +218,8 @@ PARK_INK = 96 * 65536 + 186 * 256 + 96
 
 CURSOR_INK = 244 * 65536 + 240 * 256 + 214
 
-# --- A colour ---------------------------------------------------------------
+LABEL_INK = 24 * 65536 + 28 * 256 + 40
+
 nomethod fn channel(v: int) -> int:
     if v < 0:
         0
@@ -105,10 +255,6 @@ nomethod fn core_rows(city: simcity::city::City, x: int, y: int) -> int:
     else:
         level
 
-# --- The frame -------------------------------------------------------------
-
-# --- The frame -------------------------------------------------------------
-# --- Integer division, written out -----------------------------------------
 #
 # `/` divides Float64 values only and Botlish has no integer division, so the
 # two divisions a frame needs (a texture-pixel row into its map row, and a
@@ -156,7 +302,6 @@ nomethod fn pixel(ink: int) -> List[std::byte::Byte] errors std::byte::AboveRang
 nomethod fn dim(ink: int) -> int:
     div(ink, 65536) * 65536 + bit_and(div(ink, 2048), 60) * 256 + bit_and(div(ink, 8), 60)
 
-# --- What a tile shows -----------------------------------------------------
 nomethod fn terrain_ink(city: simcity::city::City, x: int, y: int) -> int:
     ground = simcity::city::terrain(city, x, y)
     if ground == simcity::city::WATER:
@@ -216,17 +361,26 @@ nomethod fn core_ink(city: simcity::city::City, x: int, y: int) -> int:
         ground(city, x, y)
 
 # --- The frame -------------------------------------------------------------
-# One texture pixel of the tile (X, Y) at pixel row `row` of that tile.
+
+# --- The frame -------------------------------------------------------------
+# --- The frame -------------------------------------------------------------
+# --- The frame -------------------------------------------------------------
+# --- The frame -------------------------------------------------------------
+# One texture pixel of the tile (X, Y) at pixel (COL, ROW) of that tile.
 nomethod fn shade(city: simcity::city::City, x: int, y: int, row: int, col: int, at: int) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
-    ink = ground(city, x, y)
-    lit = if row > 0 and row <= core_rows(city, x, y):
-        core_ink(city, x, y)
-    else:
-        ink
     if at == simcity::city::pack(x, y):
         pixel(CURSOR_INK)
     else:
-        pixel(lit)
+        ink = ground(city, x, y)
+        lit = if row > 0 and row <= core_rows(city, x, y):
+            core_ink(city, x, y)
+        else:
+            ink
+        letter = key_of(city, x, y)
+        if letter > 0 and glyph_on(letter, row - LABEL_AT, col - LABEL_AT):
+            pixel(LABEL_INK)
+        else:
+            pixel(lit)
 
 # One texture-pixel row of the viewport: `row` is the pixel row within the
 # tile, `ty` the map row it belongs to.
@@ -236,7 +390,6 @@ nomethod fn span(city: simcity::city::City, origin_x: int, ty: int, row: int, ac
         shade(city, origin_x + tile, ty, row, px.mod(TILE), at)
     flat(pixels)
 
-# The whole viewport as one list of bytes.
 # The whole viewport as one list of bytes, with the tile AT (or none) marked
 # as the placement preview.
 nomethod fn frame(city: simcity::city::City, origin_x: int, origin_y: int, across: int, down: int, at: int) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:

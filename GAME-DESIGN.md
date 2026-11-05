@@ -139,6 +139,34 @@ the one permanent consequence of overspending.
 Not implemented. There is no fire, flood or earthquake beyond the fire risk a
 works carries, which pushes land value down and nothing else.
 
+## What is drawn on a tile
+
+The map is one texture, eight pixels to a tile. Eight pixels is the size a
+single letter needs: each tile that carries an object draws a five by five box
+of pixels at the top-left of its tile, and the box is one letter's bitmap. The
+letter is decided from the city, not from the drawing:
+
+| letter | what stands there |
+|---|---|
+| R | a residential zone, whatever its level |
+| C | a commercial zone |
+| I | an industrial zone |
+| P | a coal plant |
+| N | a nuclear plant |
+| O | a police post |
+| F | a fire post |
+| K | a park |
+| none | bare ground, roads, rails, power lines, water |
+
+The ground, the roads and the wires carry no letter because they are read by
+their shape and colour, and a letter over them would only hide which is which.
+The key is printed on the palette, so a player never has to inspect a tile to
+tell a coal plant from a nuclear one. `labels.bot` tests the decisions and the
+drawing both: that a residential tile carries a letter and a road does not,
+that housing's letter and industry's are not the same shape under two names,
+and that a tile rendered on its own carries exactly as many pixels of label ink
+as its letter sets.
+
 ## What is left out
 
 * Rail works as a road does, for connectivity, and has no distinct behaviour.
