@@ -10,6 +10,7 @@ What was compiled, what was run, and what it did.
 | `tests.bot` | the city, 38 cases | compiles; **38 passed, 0 failed** |
 | `labels.bot` | the letters on the map, 6 cases | compiles; **6 passed, 0 failed** |
 | `crossings.bot` | the lines that may share a tile, 11 cases | compiles; **11 passed, 0 failed** |
+| `saves.bot` | a city written to a file and read back, 5 cases | compiles; **5 passed, 0 failed** |
 | `gametest.bot` | the window, no display | compiles; all four figures printed and correct |
 | `bench.bot` | the performance report | compiles; the figures below printed |
 
@@ -83,8 +84,8 @@ renderer draws nothing and no frame is uploaded:
     residents 1260
     funds 88,725
     months advanced 1400
-    1000 months took 21,711 ms
-    one month takes 21,711 microseconds      21.7 ms a month
+    1000 months took 20,353 ms
+    one month takes 20,353 microseconds      20.4 ms a month
 
 The town holds 27 developed tiles out of 2304 -- a deliberately small
 developed city, because the requirement is a *representative* developed city and
@@ -115,10 +116,25 @@ real but worth a fifth of that.
 
 ### What this means for play
 
-22 ms a month is 4% of the CPU at the game's normal speed (a month every half a
-second) and 22% at rush (a month every tenth of a second). Rendering is extra
-and separate: a whole viewport of 26 by 19 tiles is 331,776 bytes of texture,
-redrawn only when the city or the pointer's tile changes.
+### What the bigger map costs
+
+The game now starts a 64 by 64 map instead of 48 by 48, and the simulation's
+passes over the tile list are its whole cost, so a month is dearer:
+
+| map | one month |
+|---|---|
+| 48 by 48 (2,304 tiles, what `bench.bot` measures) | 20.4 ms |
+| 64 by 64 (4,096 tiles, what the game starts) | 32.7 ms |
+
+32.7 ms a month is 7% of the CPU at the game's normal speed (a month every half
+a second) and 33% at rush (a month every tenth of a second), with the frame's
+upload of a 32 by 22 viewport on top. That is the trade for a city four times
+the viewport instead of two, and it is one constant in `simcity/app.bot` to
+change back. `bench.bot` still measures 48 by 48, so the two figures are the
+same benchmark before and after.
+
+Rendering is extra and separate: a whole viewport of 32 by 22 tiles is 811,008
+bytes of texture, redrawn only when the city or the pointer's tile changes.
 
 ## What was run, and what was not
 
@@ -126,6 +142,15 @@ redrawn only when the city or the pointer's tile changes.
 |---|---|
 | the model compiles | yes |
 | the city's 38 tests pass | yes, run |
+| the view scrolls, and only when a key is pressed | yes, run: `gametest.bot`
+  injects an arrow key, calls the loop's own `read_keys`, and answers that the
+  view moved one step in x and none in y, and that a second read with the key
+  still down moves it no further |
+| a city saved to a file comes back as it was | yes, run: `gametest.bot` presses
+  the game's own Save, replaces the city with a different one, presses Load, and
+  answers that the funds, the road count and the month are the ones that were
+  saved. `saves.bot` does the same at the module level, and refuses a file that
+  is not a save and an empty one |
 | a power line crosses a road and a rail | yes, run: `crossings.bot`, 11 cases.
   With the crossing rule weakened in either direction three cases fail, and
   with a crossing tile made to stop carrying traffic or power the case that
@@ -152,6 +177,8 @@ redrawn only when the city or the pointer's tile changes.
   a second, and 40 headless frames of the loop's own `month` advance 8 simulated
   months, which is the tempo set |
 | the game's own frame loop, complete | not exercised to the end |
+| a save driven by a human hand choosing a file | not run: the file dialog
+  Raven offers is not wired up, and a player names the file in a field instead |
 
 ## Defects found by driving the window, and fixed
 
@@ -194,6 +221,10 @@ redrawn only when the city or the pointer's tile changes.
   the palette. `labels.bot` tests it: a residential tile carries a letter, a
   road carries none, and a tile rendered on its own carries exactly as many
   pixels of label ink as its letter sets.
+* **The window opened too small and the palette's lower half was unreachable.**
+  (Fixed in the commit before this one.) The palette now also declares its own
+  natural height, and `gametest.bot` reads it back: 208 points wanted against
+  386 held. Shrink the row the palette sits in and that figure answers 0.
 * **The letters leaked off their tile.** The first version of the glyph
   read its pixel by naming a bit position and guarding only that position, so
   a pixel one row or one column outside the letter's box could still be read:

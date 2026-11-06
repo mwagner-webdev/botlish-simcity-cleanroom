@@ -6,7 +6,8 @@ one edit and a test says which balance it expects.
 
 ## The map
 
-A map is a grid of WIDTH by HEIGHT tiles; the game starts a 48 by 48 map. Each
+A map is a grid of WIDTH by HEIGHT tiles; the game starts a 64 by 64 map and
+the window shows 32 by 22 of them, so the city is four times the viewport. Each
 tile's terrain is one of water, grass, trees or rough ground, made by a
 deterministic value noise of the seed (`simcity/city.bot`'s `land_of`): two
 lattices over 32-tile cells, blended for the water's shape, and one for trees
@@ -15,6 +16,50 @@ same seed is the same land every run.
 
 Buildable ground is everything but water. Trees and rough ground are cleared by
 the bulldozer for $1 a tile.
+
+## The view
+
+The view is a window onto the map, not the map itself. It moves by the arrow
+keys and by four buttons under the map, a screen at a step and with two rows of
+overlap so a scroll never replaces the view with one that shares nothing with
+it. It stops at the map's edge: a view showing ground that is not on the map
+shows nothing.
+
+The keys are polled rather than reported. Raven's event bridge carries named
+actions and value changes and nothing else, and Raven has no key-state query of
+its own, so `simcity::screen::key_down` is asked once a frame -- the same
+mechanism the mouse uses. A key held down moves the view one step and then waits
+for a release, because the mask of keys is stored between frames and a press is
+a bit that is set now and was not set before.
+
+## Saving and loading
+
+A save is a text file of fixed-width decimal fields, written and read through
+Raven's own file calls. `simcity/store` is the only module that knows them, for
+the same reason `simcity::screen` is the only module that knows how a texture
+reaches Raven: the raw authority a FFI needs stays in one file where a reader
+can see all of it. The format is `simcity/save`'s:
+
+    "SIMCITY1\n"       the magic
+    WIDTH      4 digits
+    HEIGHT     4 digits
+    BANK       15 slots, 11 digits each: the value plus 10 billion, so a slot
+                may hold a negative balance and still be one fixed-width field
+    then 15 tile attributes in a fixed order, each a 3-character tag, a newline,
+    and one fixed-width field per tile
+
+Fixed widths are the point: Botlish has no split and no parse, so a format that
+needs neither is the format to have. A field is its digits with zeroes in front,
+and a reader takes it by position alone. The tags are the order's own check -- a
+reader that expected land and found the zone's tag has a file that is not this
+format, and says so rather than reading a city that is quietly wrong.
+
+A save holds every attribute and not only the ones a player made: power, road
+access and the environment are recomputed by the next month, but a city loaded
+before that month should look exactly like the one that was saved. A value that
+would not fit its field is clamped, because a wider field would move every field
+after it; the only quantity that can reach the ceiling is the smoke or the crime
+of a heavily built city, and one point of smoke is cheaper than a corrupt save.
 
 ## A month
 
@@ -204,7 +249,10 @@ as its letter sets.
 * There are no zones' distinct uses of land beyond the zoning categories.
 * There is no water supply, no schools, no hospitals, no stadiums, no ports and
   no airports.
-* There is no save and load.
+* One save file at a time, named by the player in a field: no file dialog, no
+  list of cities, no autosave. Raven has a file dialog and the save path goes
+  through a text field rather than it, because the dialog's descriptor is a C
+  struct this game would have to declare by hand.
 * There are no city history graphs, no minimap, and no overlays beyond the
   preview of the tile under the pointer.
 * The tax rate is a single figure, not three categories.

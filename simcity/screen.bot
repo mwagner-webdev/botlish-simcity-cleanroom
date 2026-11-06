@@ -54,6 +54,7 @@ import raven
 
 import raven::resources
 
+import raven::widget
 import raven::window
 
 extern c library "raven_bridge" static
@@ -101,6 +102,8 @@ private struct Cell:
     bytes: std::ffi::c::Ptr[std::ffi::c::UChar]
     mx: std::ffi::c::Ptr[std::ffi::c::Float]
     my: std::ffi::c::Ptr[std::ffi::c::Float]
+    wish_w: std::ffi::c::Ptr[std::ffi::c::Float]
+    wish_h: std::ffi::c::Ptr[std::ffi::c::Float]
     size: int
 
 # One C float in native memory.
@@ -132,18 +135,26 @@ nomethod fn open(width: int, height: int, context s: Screen) -> unit errors OutO
         frame = u_long(1).calloc(u_long(want))
         mx = u_long(1).calloc(u_long(4))
         my = u_long(1).calloc(u_long(4))
-        if frame.null?() or mx.null?() or my.null?():
+        wide = u_long(1).calloc(u_long(4))
+        tall = u_long(1).calloc(u_long(4))
+        if frame.null?() or mx.null?() or my.null?() or wide.null?() or tall.null?():
             gone = std::ffi::c::erase(frame)
             gone2 = std::ffi::c::erase(mx)
             gone3 = std::ffi::c::erase(my)
+            gone4 = std::ffi::c::erase(wide)
+            gone5 = std::ffi::c::erase(tall)
             free(gone)
             free(gone2)
             free(gone3)
+            free(gone4)
+            free(gone5)
             fail OutOfRange
         cell = Cell {
             bytes: std::ffi::c::retype[std::ffi::c::UChar](frame),
             mx: std::ffi::c::retype[std::ffi::c::Float](mx),
             my: std::ffi::c::retype[std::ffi::c::Float](my),
+            wish_w: std::ffi::c::retype[std::ffi::c::Float](wide),
+            wish_h: std::ffi::c::retype[std::ffi::c::Float](tall),
             size: total
         }
         s.cells.push(cell)
@@ -152,13 +163,17 @@ nomethod fn open(width: int, height: int, context s: Screen) -> unit errors OutO
 
 nomethod fn release(context s: Screen) -> unit errors IndexNotFound:
     cell = s.cells.pop()
-    {bytes, mx, my} = cell
+    {bytes, mx, my, wish_w, wish_h} = cell
     gone = std::ffi::c::erase(bytes)
     gone2 = std::ffi::c::erase(mx)
     gone3 = std::ffi::c::erase(my)
+    gone4 = std::ffi::c::erase(wish_w)
+    gone5 = std::ffi::c::erase(wish_h)
     free(gone)
     free(gone2)
     free(gone3)
+    free(gone4)
+    free(gone5)
 
 # Raven's handle for a texture holding PIXELS, which must be exactly
 # 4 * WIDTH * HEIGHT bytes: it is lent read-only for the upload.
@@ -186,6 +201,17 @@ nomethod fn mouse_at(window: raven::Window, context s: Screen) -> List[Float64] 
     here = std::binary::native::view(FloatCell, s.cells.element(0).mx)
     there = std::binary::native::view(FloatCell, s.cells.element(0).my)
     [here.value, there.value]
+
+# The size a widget would like to be, in logical units: Raven's own measure,
+# which is how a window knows whether a control it is about to hold actually
+# fits. A control laid out outside its parent's slot is never drawn and can
+# never be clicked, so the natural size is the number that decides whether a
+# palette is reachable.
+nomethod fn wish(widget: raven::Widget, context s: Screen) -> List[Float64] errors IndexNotFound, NativeViewNull, OutOfRange, NonFiniteFloat:
+    widget.id.Rwidget_get_desired_size(s.cells.element(0).wish_w, s.cells.element(0).wish_h)
+    from = std::binary::native::view(FloatCell, s.cells.element(0).wish_w)
+    to = std::binary::native::view(FloatCell, s.cells.element(0).wish_h)
+    [from.value, to.value]
 
 nomethod fn down?(window: raven::Window, button: std::ffi::c::UInt) -> bool:
     window.id.Rwindow_is_mouse_button_down(button) != 0

@@ -157,6 +157,30 @@ and `-help std::mutable_array::copy` answered the two questions I asked most.
   on to the top. `simcity/app.bot` declares `NonFiniteFloat` in seven places
   because Raven reports a float somewhere near the top. There is no way to
   convert one error into another at a boundary except by handling it there.
+* **There is no file input or output in the standard library.** `std::io` is
+  `print`, `print_line`, `write_error` and `write_error_line`, and nothing else
+  reads or writes a file. Raven does have `Rfile_read` and `Rfile_write`, so
+  save/load was possible, but only by declaring a second FFI in a module of my
+  own -- and only after three things the compiler insisted on: a C string is
+  built by hand (`encode_utf8`, a NUL appended, `bytes::from_list`), a C
+  contract that may keep a pointer needs a context struct or `direct module`,
+  and a pointer returned by a call whose parameter is `noescape` needs the
+  result declared `independent` before a temporary may be passed. None of that
+  is in the package's guide.
+* **`extern c library "raven"` is not `static`.** Declaring the same library
+  the package does, as `static`, fails to link: there is a `libraven.so` and no
+  `libraven.a`, and the package's own declaration is bare. I found the
+  distinction by reading the error.
+* **`Usize` and `ULong` are different types and neither converts to `int`.** A
+  `Bytes`'s length is a `Usize` and a C `size_t` is a `ULong`, and there is no
+  `usize_to_int`. The way through is that `std::abi::usize` accepts a `ULong`,
+  so a length read out of native memory goes ULong -> Usize, and a length the
+  program counts itself stays an `int`.
+* **A context-requiring function cannot be passed as a value.** This bit twice:
+  `tests.bot` cannot take a case that touches a file, because a case that
+  touches a file requires the store's context and `std::test::holds` takes
+  functions as arguments. `saves.bot` is therefore a program that prints its own
+  report rather than a suite, which is the same shape with a different runner.
 * **`compilerpedia` does not know a project's own symbols.** `-help simcity::sim::tick`
   answers "no Compilerpedia topic matches". For a program of eleven modules that
   leaves cross-references as plain comments.
@@ -244,14 +268,16 @@ system cannot see, and the bug in section 7 was exactly a well-typed call.
 
 | measurement | value |
 |---|---|
-| lines of Botlish in `simcity/` and the six entry programs | about 3,900 |
+| lines of Botlish in `simcity/` and the seven entry programs | about 4,400 |
 | modules | 11 |
 | first working headless simulation | the afternoon of day one |
 | the whole simulation, once the sweep direction was fixed | 22 ms a month on 48 by 48 |
-| test cases | 55 (38 for the city, 6 for the map's letters, 11 for crossings), all
-  passing |
-| defects found by a test written after the fact | 3, two in the new label
-  drawing and one in the new crossing drawing. The label defects were the glyph
+| test cases | 60 (38 for the city, 6 for the map's letters, 11 for crossings, 5
+  for saving), all passing |
+| defects found by a test written after the fact | 5: two in the label drawing,
+  one in the crossing drawing, and two in the save format -- the bank's fields
+  were nine digits short of a 32-bit generator state, and the bank was never
+  read back, so a loaded city's clock restarted at month one. The label defects were the glyph
   guard leaking pixels outside the letter's box and the rows reading the wrong
   way up; the crossing drawing's stripe was at first not gated on the wire
   running that way at all. None was visible in a headless figure, and each was

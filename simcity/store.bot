@@ -1,0 +1,157 @@
+# simcity::store -- the raw layer: reading and writing the save file.
+#
+# Raven owns the file calls and the bridge owns the copies, and this module is
+# the only one that knows either. That is the same arrangement as
+# simcity::screen, which is the only module that knows how a texture reaches
+# Raven and how the mouse is polled: the rest of the game deals in cities, not
+# in pointers, and the raw authority a FFI needs stays in one file where a
+# reader can see all of it.
+#
+# A save file is text, not bytes: a city written as a city is a file a player
+# can read, and one that can be read again is one that can be checked. The
+# format is simcity::save's.
+import std::abi
+import std::abi::bytes
+import std::binary
+import std::binary::native
+import std::byte
+import std::ffi::c
+import std::list
+import std::mutable_vector
+import std::str
+
+import raven
+
+extern c library "raven"
+
+# Raven's own file calls. A path is a C string, DATA is what the file holds,
+# and a read answers both the bytes and, through SIZE, how many there were.
+# Both answer a pointer that is independent of what they were given: a C
+# contract that says independent is the one thing that lets a path be a
+# temporary while the answer is kept.
+extern c fn Rfile_write(
+    path: std::ffi::c::Ptr[std::ffi::c::Char] read noescape,
+    data: std::ffi::c::Ptr[std::ffi::c::Void],
+    size: std::ffi::c::ULong
+) -> std::ffi::c::Int
+
+extern c fn Rfile_read(
+    path: std::ffi::c::Ptr[std::ffi::c::Char] read noescape,
+    size: std::ffi::c::Ptr[std::ffi::c::ULong]
+) -> std::ffi::c::Ptr[std::ffi::c::Char] independent
+
+extern c library "raven_bridge" static
+
+# The bytes of a file, copied out of Raven's storage into storage this module
+# lends for the call: a length known only at run time is exactly what the
+# bridge's copy is for.
+private extern c fn botlish_raven_bytes_copy(data: std::ffi::c::Ptr[std::ffi::c::UChar] read noescape, out: std::ffi::c::Ptr[std::ffi::c::UChar] write noescape, count: std::ffi::c::ULong) -> std::ffi::c::ULong
+
+private extern c fn calloc(count: std::ffi::c::ULong, size: std::ffi::c::ULong) -> std::ffi::c::Ptr[std::ffi::c::Void] independent
+
+private extern c fn free(memory: std::ffi::c::Ptr[std::ffi::c::Void]) -> unit
+
+# This module's authority: the same shape as simcity::screen's, because it is
+# for the same reason. A C function whose contract may keep a pointer needs a
+# context, and the raw authority this module holds is discharged by one.
+opaque context struct Store:
+    held: MutableVector[int]
+
+nomethod fn create() -> Store:
+    Store {held: std::mutable_vector::from_list([])}
+
+# Why a save did not happen.
+error StoreFailed
+
+# The file's bytes were not UTF-8, so they could not be a city's text.
+error NotText
+
+# A count this module cannot hold in a C integer.
+error OutOfRange
+
+# One C size_t, for the length a read answers.
+private layout SizeCell:
+    size 8
+    align 8
+    field value: std::ffi::c::ULong at 0
+
+nomethod fn u_long(n: int) -> std::ffi::c::ULong errors OutOfRange:
+    if n < 0 or n > 18446744073709551615:
+        fail OutOfRange
+    n
+
+# This module's own memory, COUNT bytes of it, as a plain C pointer the file
+# calls can be given: a C call that answers a pointer may point into what it
+# was given, so the bytes a save is made of are this module's and not a
+# temporary. OutOfRange: the count is no C number.
+nomethod fn own(count: int, context s: Store) -> std::ffi::c::Ptr[std::ffi::c::Void] errors StoreFailed, OutOfRange:
+    made = u_long(1).calloc(u_long(count))
+    if made.null?():
+        gone = std::ffi::c::erase(made)
+        free(gone)
+        fail StoreFailed
+    else:
+        made
+
+# The same memory as the UChar pointer the bridge's copy writes into.
+nomethod fn own_uchars(count: int, context s: Store) -> std::ffi::c::Ptr[std::ffi::c::UChar] errors StoreFailed, OutOfRange:
+    std::ffi::c::retype[std::ffi::c::UChar](own(count))
+
+# The same memory as the C size_t the file calls write a length into.
+nomethod fn own_size(count: int, context s: Store) -> std::ffi::c::Ptr[std::ffi::c::ULong] errors StoreFailed, OutOfRange:
+    std::ffi::c::retype[std::ffi::c::ULong](own(count))
+
+# The bytes of TEXT as a C string: a Botlish string is UTF-8 already, so a NUL
+# on the end is all a C caller needs.
+nomethod fn cstring(text: str) -> std::abi::bytes::Bytes:
+    std::abi::bytes::from_list(std::str::encode_utf8(text).append(std::byte::from_int(0)))
+
+# Writes TEXT to the file PATH, replacing whatever was there. Raven answers
+# whether it wrote: a save a player cannot find is worth nothing, so a failure
+# is an error and not a silent success.
+#
+# The byte count is the text's length, and a save's text is digits, letters and
+# newlines only, so its UTF-8 encoding is one byte a character and the two
+# counts are the same number.
+nomethod fn write(path: str, text: str, context s: Store) -> unit errors StoreFailed, OutOfRange:
+    count = std::str::length(text)
+    made = own_uchars(count)
+    bytes = std::abi::bytes::from_list(std::str::encode_utf8(text))
+    bytes.botlish_raven_bytes_copy(made, u_long(count))
+    gone = std::ffi::c::erase(made)
+    answer = cstring(path).Rfile_write(gone, u_long(count))
+    free(gone)
+    if answer == 0:
+        fail StoreFailed
+    else:
+        unit
+
+# The text of the file PATH, or why there was none.
+nomethod fn read(path: str, context s: Store) -> str errors StoreFailed, NotText, OutOfRange, std::abi::AbiIntegerBelowRange, std::abi::AbiIntegerAboveRange, NativeViewNull, UpperOverrun:
+    cell = own_size(8)
+    there = cstring(path).Rfile_read(cell)
+    how_long = std::binary::native::view(SizeCell, cell).value
+    gone = std::ffi::c::erase(cell)
+    free(gone)
+    if how_long == 0:
+        fail StoreFailed
+    else:
+        here = std::ffi::c::retype[std::ffi::c::UChar](std::ffi::c::erase(there))
+        bytes = std::abi::bytes::zeroed(std::abi::usize(how_long))
+        copied = here.botlish_raven_bytes_copy(bytes, how_long)
+        kept = copied.out.freeze_prefix(std::abi::usize(copied.result))
+        text = std::abi::bytes::decode_utf8(kept):
+            on InvalidUtf8:
+                ""
+        if std::str::length(text) == 0:
+            fail NotText
+        else:
+            text
+
+# WHETHER CITY's text reached the file PATH: the write's answer as a boolean,
+# so a caller can say what happened without knowing the error's name.
+nomethod fn wrote(path: str, text: str, context s: Store) -> bool errors simcity::store::OutOfRange:
+    simcity::store::write(path, text):
+        on simcity::store::StoreFailed:
+            unit
+    true

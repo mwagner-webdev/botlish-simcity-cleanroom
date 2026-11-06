@@ -27,6 +27,7 @@ from another language.
     tests.bot             the headless suite for the city (38 cases)
     labels.bot            the headless suite for the letters on the map (6 cases)
     crossings.bot         the headless suite for one line crossing another (11 cases)
+    saves.bot             saving a city to a file and reading it back (5 cases)
     gametest.bot          the windowed game, exercised with no display
     sight.bot             the map is drawn, checked on the real renderer
     bench.bot             the deterministic performance report
@@ -65,7 +66,10 @@ A standalone executable beside the program:
 | build | click the map; drag to run a road or a line |
 | cross a power line over a road or a rail | lay the wire on the tile the road
   or rail already holds: the tile keeps both, and power still runs through |
-| move the view | arrow keys |
+| move the view | arrow keys, or the four buttons under the map: a screen at a
+  step, and never past the edge of the map |
+| save a city | type a filename in the field, press Save |
+| load a city | the same field, then Load |
 | follow the pointer | the tile under it is drawn as a pale preview |
 | read a tile without inspecting it | the single letter it carries: R, C, I the
   zones, P and N the power plants, O police, F fire, K park. The key is on the
@@ -74,6 +78,17 @@ A standalone executable beside the program:
 | see the budget | the Budget button: taxes, upkeep, balance |
 | pause, march, rush | the three buttons on the right |
 | a new town | the New town button |
+
+A new town is 64 by 64 tiles and the window shows 32 by 22 of them, so the city
+is four times the viewport and the view has to move. Arrow keys scroll it; Raven
+reports named actions but not keys, so the keys are polled each frame, which is
+the same mechanism the mouse uses. A held key scrolls once and waits, and the
+four buttons under the map do the same for a player who would rather click.
+
+Save writes the whole city -- every tile attribute, the bank, and the clock --
+to a text file of fixed-width decimal fields, so a save is a file you can read.
+Load puts it back and answers with what it did; a file that is not a save leaves
+the city alone.
 
 Start with the loop the game means you to learn: a road along a tile, a power
 line beside it, a coal plant at the end, and residential, commercial and
@@ -85,12 +100,16 @@ and nothing is served; tax to the maximum and what you built walks away.
     ./botlish-linux-x86_64 -backend cranelift tests.bot     # the city, 38 cases
     ./botlish-linux-x86_64 -backend cranelift labels.bot    # the map's letters, 6 cases
     ./botlish-linux-x86_64 -backend cranelift crossings.bot # one line over another, 11 cases
+    ./botlish-linux-x86_64 -backend cranelift saves.bot     # a city to a file and back, 5 cases
     ./botlish-linux-x86_64 -backend cranelift gametest.bot  # the window, no display
     ./botlish-linux-x86_64 -backend cranelift sight.bot     # the map, on the real renderer
     ./botlish-linux-x86_64 -backend cranelift bench.bot     # the performance report
 
-`tests.bot` prints PASS or FAIL per case and a count, and so does `labels.bot`
-and `crossings.bot`.
+`tests.bot`, `labels.bot` and `crossings.bot` print PASS or FAIL per case and a
+count. `saves.bot` does the same, and writes a real file: it is a program rather
+than a suite, because a case that touches a file needs the store's context and a
+function that needs a context cannot be passed as a value -- which is what a
+suite's registration is.
 `gametest.bot` drives the same window headlessly and prints the map's size,
 whether all four corners of the map are reachable, what a click spent, what the
 inspector says, that the map is an image widget, and that the palette's bottom

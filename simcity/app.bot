@@ -31,19 +31,42 @@ import raven::window
 import simcity::actions
 import simcity::city
 import simcity::render
+import simcity::save
 import simcity::screen
+import simcity::store
 import simcity::sim
 import simcity::toolbar
 import simcity::words
 
 # --- The shape of the game -------------------------------------------------
 
-# Map tiles the viewport shows, and screen pixels per map tile.
-ACROSS = 26
-DOWN = 19
+# Map tiles the viewport shows, and screen pixels per map tile. A viewport of
+# 32 by 22 tiles is what fits beside a 500-point palette in a window that is
+# still small enough for a laptop screen, and it is a quarter of the map, so
+# there is a city to scroll through rather than a city that is all on screen.
+ACROSS = 32
+DOWN = 22
 TILE_PX = 16
+# The map a new town starts on: four times the area of the viewport, so the
+# player has to choose where to build rather than building everywhere at once.
+MAP_WIDE = 64
+MAP_TALL = 64
+# How far the view moves at one step of a scroll button: a screen less a couple
+# of rows of overlap, so a scroll never hides the ground the player was looking
+# at and the next view still shows where the last one ended.
+VIEW_STEP_ACROSS = ACROSS - 2
+VIEW_STEP_DOWN = DOWN - 2
 # The palette's width in screen pixels.
 TOOL_WIDE = 500
+# The file a save starts as. A player types over it: the field is there so a
+# city can be kept in more than one place.
+SAVE_PATH = "simcity.save"
+
+# The window, sized so the map and the palette fit beside each other inside it:
+# a control laid out outside the window is neither drawn nor clickable, which
+# is the bug the three-column palette was built to avoid.
+WINDOW_WIDE = 1040
+WINDOW_TALL = 620
 
 # How fast the city runs: a choice of simulated month per timer tick. A tick
 # of the timer is a tenth of a second, so "month" is a month every half a
@@ -64,6 +87,7 @@ struct State:
     cursor_y: int
     held: bool
     ticks: int
+    keys: int
     message: str
     redraw: bool
 
@@ -82,6 +106,7 @@ struct Game:
     want_c: raven::Widget
     want_i: raven::Widget
     note: raven::Widget
+    path: raven::Widget
     tax: raven::Widget
     clock: raven::Timer
 
@@ -106,6 +131,16 @@ nomethod fn screen_width() -> Float64:
 
 nomethod fn screen_height() -> Float64:
     std::float64::from_int(TILE_PX * DOWN)
+
+# The map box alone, without the scroll row under it: the palette beside it is
+# held to this, so the two columns of the body end at the same edge.
+nomethod fn screen_tall() -> int:
+    TILE_PX * DOWN
+
+# The points a scroll row of buttons takes up, alongside the map: enough for
+# one row of controls and no more, so the map stays the tall thing in its
+# column.
+VIEW_ROW = 34
 
 # Simulated months per timer tick.
 nomethod fn speed_rate(speed: Speed) -> int:
@@ -137,6 +172,7 @@ nomethod fn no_state() -> State:
         cursor_y: -1,
         held: false,
         ticks: 0,
+        keys: 0,
         message: "nothing here",
         redraw: false
     }
@@ -166,6 +202,7 @@ nomethod fn with_city(game: Game, city: simcity::city::City) -> Game:
         cursor_y: s.cursor_y,
         held: s.held,
         ticks: s.ticks,
+        keys: s.keys,
         message: s.message,
         redraw: true
     })
@@ -183,6 +220,7 @@ nomethod fn with_message(game: Game, text: str) -> Game:
         cursor_y: s.cursor_y,
         held: s.held,
         ticks: s.ticks,
+        keys: s.keys,
         message: text,
         redraw: true
     })
@@ -200,6 +238,7 @@ nomethod fn with_tool(game: Game, tool: Tool) -> Game:
         cursor_y: s.cursor_y,
         held: s.held,
         ticks: s.ticks,
+        keys: s.keys,
         message: simcity::words::show_tool(tool).concat(", ").concat(simcity::words::show_cost(tool)),
         redraw: true
     })
@@ -217,6 +256,7 @@ nomethod fn with_speed(game: Game, speed: Speed) -> Game:
         cursor_y: s.cursor_y,
         held: s.held,
         ticks: s.ticks,
+        keys: s.keys,
         message: speed_label(speed),
         redraw: true
     })
@@ -234,6 +274,7 @@ nomethod fn with_view(game: Game, origin_x: int, origin_y: int) -> Game:
         cursor_y: s.cursor_y,
         held: s.held,
         ticks: s.ticks,
+        keys: s.keys,
         message: s.message,
         redraw: true
     })
@@ -254,6 +295,7 @@ nomethod fn with_cursor(game: Game, cursor_x: int, cursor_y: int, held: bool) ->
         cursor_y: cursor_y,
         held: held,
         ticks: s.ticks,
+        keys: s.keys,
         message: s.message,
         redraw: s.redraw or not same
     })
@@ -262,7 +304,7 @@ nomethod fn with_cursor(game: Game, cursor_x: int, cursor_y: int, held: bool) ->
 # --- The window ------------------------------------------------------------
 
 nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
-    window = raven::window("SimCity", 940, 560)
+    window = raven::window("SimCity", WINDOW_WIDE, WINDOW_TALL)
     funds = raven::label(simcity::words::show_funds(city))
     people = raven::label(simcity::words::show_people(city))
     jobs = raven::label(simcity::words::show_jobs(city))
@@ -272,6 +314,9 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
     want_c = raven::label(simcity::words::show_demand(city, 1))
     want_i = raven::label(simcity::words::show_demand(city, 2))
     note = raven::label("Build something.")
+    # The file a save is written to and read from: a text field, because a
+    # fixed filename would leave a player with one city and no way to a second.
+    path = raven::text_input(SAVE_PATH)
     tax = raven::spin_box(0.0, 20.0)
     tax.set_spin_box_value(std::float64::from_int(simcity::city::tax_rate(city)))
     top = raven::hbox().add(funds).add(people).add(jobs).add(date).add(tempo)
@@ -290,9 +335,14 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
     # so neither pushes the other about.
     tool_box = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_SIZE_BOX)}
     tool_box.add(sides)
-    tool_box.id.Rwidget_set_size(std::float64::from_int(TOOL_WIDE), screen_height())
-    body = raven::hbox().add(map_box).add(tool_box)
-    lower = raven::hbox().add(note).add(tax)
+    tool_box.id.Rwidget_set_size(std::float64::from_int(TOOL_WIDE), std::float64::from_int(screen_tall() + VIEW_ROW))
+    # The scroll buttons sit directly under the map, because they move the map:
+    # the viewport is a quarter of the map, so a player who builds on one side
+    # of the city has to reach the other.
+    view = simcity::toolbar::view_move()
+    map_column = raven::vbox().add(map_box).add(view)
+    body = raven::hbox().add(map_column).add(tool_box)
+    lower = raven::hbox().add(note).add(path).add(tax)
     column = raven::vbox().add(top).add(demand).add(body).add(lower)
     window.set_content(column)
     started = State {
@@ -305,6 +355,7 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
         cursor_y: -1,
         held: false,
         ticks: 0,
+        keys: 0,
         message: "Build something.",
         redraw: true
     }
@@ -323,6 +374,7 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
         want_c: want_c,
         want_i: want_i,
         note: note,
+        path: path,
         tax: tax
     }
 
@@ -338,6 +390,7 @@ nomethod fn clear(game: Game) -> Game:
         cursor_y: s.cursor_y,
         held: s.held,
         ticks: s.ticks,
+        keys: s.keys,
         message: s.message,
         redraw: false
     })
@@ -422,11 +475,97 @@ nomethod fn where_is_the_cursor(game: Game) -> simcity::screen::Place:
 
 # --- What the player does --------------------------------------------------
 
+# --- The view ---------------------------------------------------------------
+
+# The farthest the view may scroll to: a view whose last row is the map's last
+# row, and never one row past it, because a view showing ground that is not on
+# the map shows nothing.
+nomethod fn keep_within(want: int, room: int, span: int) -> int:
+    if want < 0:
+        0
+    elif want > room - span:
+        room - span
+    else:
+        want
+
+# Moving the view to (X, Y), clamped to the map: a scroll never shows past the
+# map's edge, and never moves when it has nowhere left to go.
+nomethod fn scrolled_to(game: Game, origin_x: int, origin_y: int) -> Game:
+    s = state(game)
+    x = keep_within(origin_x, simcity::city::width(s.city), ACROSS)
+    y = keep_within(origin_y, s.city.height, DOWN)
+    with_view(game, x, y)
+
+# The view moved one step in a direction. A step is a screen less two rows, so
+# the view the player is looking at is never replaced by one that shares
+# nothing with it.
+nomethod fn scroll(game: Game, dx: int, dy: int) -> Game:
+    s = state(game)
+    if dx > 0:
+        scrolled_to(game, s.origin_x + VIEW_STEP_ACROSS, s.origin_y)
+    elif dx < 0:
+        scrolled_to(game, s.origin_x - VIEW_STEP_ACROSS, s.origin_y)
+    elif dy > 0:
+        scrolled_to(game, s.origin_x, s.origin_y + VIEW_STEP_DOWN)
+    else:
+        scrolled_to(game, s.origin_x, s.origin_y - VIEW_STEP_DOWN)
+
+# --- Saving and loading -----------------------------------------------------
+#
+# A save is a file a player can read, and a load is a city that comes back as
+# the city that was saved. Both go through the raw layer (simcity::store) for
+# the file, and the codec (simcity::save) for the format: the game itself only
+# knows a path and a city.
+
+# The file the path field names right now.
+nomethod fn save_path(game: Game) -> str:
+    raven::input_text(game.path)
+
+# Writing the city to that file, and saying what happened.
+nomethod fn save_city(game: Game) -> Game:
+    path = save_path(game)
+    text = simcity::save::describe(state(game).city)
+    written = simcity::store::wrote(path, text):
+        on simcity::store::StoreFailed:
+            false
+    if written:
+        with_message(game, "Saved ".concat(path).append_char('.'))
+    else:
+        with_message(game, "Could not write ".concat(path).append_char('.'))
+
+# The city a save's text describes, made the game's own.
+nomethod fn read_back(game: Game, text: str) -> Game:
+    city = simcity::save::rebuild(text):
+        on simcity::save::BadSave:
+            state(game).city
+    with_city(with_view(game, 0, 0), city)
+
+# Reading the city back from that file, and saying what happened. A file that
+# is not a save leaves the city exactly as it was: a load that half-happened is
+# worse than one that did not.
+nomethod fn load_city(game: Game) -> Game:
+    path = save_path(game)
+    text = simcity::store::read(path):
+        on simcity::store::StoreFailed:
+            ""
+        on simcity::store::NotText:
+            ""
+        on NativeViewNull:
+            ""
+        on UpperOverrun:
+            ""
+    found = std::str::length(text) > 0
+    if found:
+        loaded = read_back(game, text)
+        with_message(loaded, "Loaded ".concat(path).append_char('.'))
+    else:
+        with_message(game, "Nothing to load at ".concat(path).append_char('.'))
+
 nomethod fn budget_line(city: simcity::city::City) -> str:
     simcity::words::show_income(city).concat(", ").concat(simcity::words::show_upkeep(city)).concat(", ").concat(simcity::words::show_balance(city))
 
 nomethod fn begin(game: Game) -> Game:
-    fresh = simcity::city::make(48, 48, 4242, 20000)
+    fresh = simcity::city::make(MAP_WIDE, MAP_TALL, 4242, 20000)
     restarted = with_city(game, fresh)
     with_message(restarted, "A new town on new land.")
 
@@ -476,8 +615,96 @@ nomethod fn act(game: Game, name: str) -> Game:
         with_message(game, budget_line(state(game).city))
     elif name == "new":
         begin(game)
+    elif name == "save":
+        save_city(game)
+    elif name == "load":
+        load_city(game)
+    elif name == "view.left":
+        scroll(game, -1, 0)
+    elif name == "view.right":
+        scroll(game, 1, 0)
+    elif name == "view.up":
+        scroll(game, 0, -1)
+    elif name == "view.down":
+        scroll(game, 0, 1)
     else:
         game
+
+# --- The view, and the keys that move it ------------------------------------
+#
+# The map is four times the viewport, so the view has to move. Raven's event
+# bridge reports named actions and value changes, and Raven does not hand a key
+# press to it, so the keys are polled instead: the same mechanism the mouse
+# uses, once a frame, from `simcity::screen::key_down`.
+#
+# Four keys, one bit each, so the previous frame's mask is one integer and a
+# press is a bit that is set now and was not set before: a key held down moves
+# the view one step and then waits to be released, which is what a key does.
+KEY_LEFT = 1
+
+KEY_RIGHT = 2
+
+KEY_UP = 4
+
+KEY_DOWN = 8
+
+# The four arrow keys, as a mask: 0 for none of them, and one bit per key.
+nomethod fn key_mask(game: Game) -> int:
+    left = if simcity::screen::key_down(game.window, raven::window::R_KEY_LEFT):
+        KEY_LEFT
+    else:
+        0
+    right = if simcity::screen::key_down(game.window, raven::window::R_KEY_RIGHT):
+        KEY_RIGHT
+    else:
+        0
+    up = if simcity::screen::key_down(game.window, raven::window::R_KEY_UP):
+        KEY_UP
+    else:
+        0
+    down = if simcity::screen::key_down(game.window, raven::window::R_KEY_DOWN):
+        KEY_DOWN
+    else:
+        0
+    left + right + up + down
+
+# WHETHER the key BIT is set now and was not set before: a key held down moves
+# the view one step and then waits to be released, which is what a key does.
+nomethod fn just_pressed(now: int, was: int, bit: int) -> bool:
+    bit_and(now, bit) != 0 and bit_and(was, bit) == 0
+
+# Reading the keys, and moving the view by one step for each one pressed
+# since the last frame. The new mask is stored, so a held key moves the view
+# once rather than once a frame.
+nomethod fn read_keys(game: Game) -> Game:
+    s = state(game)
+    now = key_mask(game)
+    moved = if just_pressed(now, s.keys, KEY_LEFT):
+        scroll(game, -1, 0)
+    elif just_pressed(now, s.keys, KEY_RIGHT):
+        scroll(game, 1, 0)
+    elif just_pressed(now, s.keys, KEY_UP):
+        scroll(game, 0, -1)
+    elif just_pressed(now, s.keys, KEY_DOWN):
+        scroll(game, 0, 1)
+    else:
+        game
+    t = state(moved)
+    put(moved, State {
+        city: t.city,
+        tool: t.tool,
+        speed: t.speed,
+        origin_x: t.origin_x,
+        origin_y: t.origin_y,
+        cursor_x: t.cursor_x,
+        cursor_y: t.cursor_y,
+        held: t.held,
+        ticks: t.ticks,
+        keys: now,
+        message: t.message,
+        redraw: t.redraw
+    })
+    moved
 
 nomethod fn accept(game: Game, event: raven::Event) -> Game:
     if event.kind == raven::EventKind::Action:
@@ -535,6 +762,7 @@ nomethod fn month(game: Game) -> Game:
         cursor_y: s.cursor_y,
         held: s.held,
         ticks: next_ticks,
+        keys: s.keys,
         message: s.message,
         redraw: s.redraw or enough
     })
@@ -547,7 +775,8 @@ nomethod fn run(game: Game) -> unit errors NonFiniteFloat:
     else:
         heard = fold event in raven::events() with intermediate s game:
             accept(s, event)
-        moved = read_mouse(heard)
+        steered = read_keys(heard)
+        moved = read_mouse(steered)
         next = month(moved)
         shown = show(next)
         run(shown)

@@ -25,9 +25,14 @@ import simcity::city
 import simcity::scenario
 import simcity::screen
 import simcity::sim
+import simcity::store
 
 with context raven::create()
 with context simcity::screen::create()
+with context simcity::store::create()
+
+nomethod fn dash() -> str:
+    "".append_char('-')
 
 nomethod fn whole(value: Float64) -> int:
     if value < 0.0:
@@ -53,6 +58,12 @@ nomethod fn at(widget: raven::Widget) -> raven::Rect:
         on NonFiniteFloat:
             raven::Rect {x: 0.0, y: 0.0, width: 0.0, height: 0.0}
     measured
+
+# Every road tile in the city.
+nomethod fn road_count(city: simcity::city::City) -> int:
+    fold row from 0 to city.height with intermediate made 0:
+        fold col from 0 to city.width with intermediate u made:
+            u + simcity::city::road_at(city, col, row)
 
 # Aims at the window point (PX, PY), lets the frames deliver it, and answers
 # the tile the pointer lands on: the row and column the game would build on.
@@ -99,9 +110,7 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
     delivered = frames(4)
     built = simcity::app::state(clicked).city
     spent = 20000 - simcity::city::funds(built)
-    roads = fold row from 0 to simcity::app::DOWN with intermediate made 0:
-        fold col from 0 to simcity::app::ACROSS with intermediate u made:
-            u + simcity::city::road_at(built, col, row)
+    roads = road_count(built)
     # Now inspect the town's own residential block.
     looked = simcity::app::with_tool(clicked, simcity::city::Tool::Inspect)
     looking = simcity::app::show(looked)
@@ -113,6 +122,73 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
     read_tile = simcity::app::read_mouse(looking)
     told = frames(4)
     note = simcity::app::state(read_tile).message
+    # Saving and loading, through the game's own buttons: the city is written to
+    # the path the field names and read back from it, and the road the click
+    # built is still there afterwards. This is the check that the whole chain
+    # works -- the buttons, the field, the raw layer and the format -- and not
+    # only the format on its own.
+    kept = simcity::app::act(clicked, "save")
+    saved = simcity::app::show(kept)
+    saved_frames = frames(4)
+    said = simcity::app::state(saved).message
+    # A different city, loaded over it: the road the save held comes back.
+    other_town = simcity::scenario::town(11)
+    other = simcity::app::with_city(saved, other_town)
+    reloaded = simcity::app::act(other, "load")
+    loaded = simcity::app::show(reloaded)
+    loaded_frames = frames(4)
+    told_load = simcity::app::state(loaded).message
+    # The city that came back is the city that was saved: the same roads, the
+    # same money, and the same month -- not a fresh town on the same land.
+    put_away = simcity::app::state(saved).city
+    came_back = simcity::app::state(loaded).city
+    before_funds = simcity::city::funds(put_away)
+    after_funds = simcity::city::funds(came_back)
+    before_roads = road_count(put_away)
+    after_roads = road_count(came_back)
+    same_money = if after_funds == before_funds:
+        1
+    else:
+        0
+    same_roads = if after_roads == before_roads:
+        1
+    else:
+        0
+    same_month = if simcity::city::month(came_back) == simcity::city::month(put_away):
+        1
+    else:
+        0
+    # The view moves: an arrow key is injected, the loop's own read_keys sees
+    # it once, and the view is one step further on. Raven reports named actions
+    # but not keys, so the view is scrolled by polling -- which is what makes
+    # this checkable at all, with an injected key standing in for a real one.
+    # A map the size the game starts on: the towns the scenarios build are 32
+    # by 32, which a 32-tile viewport exactly covers, so a scroll needs a
+    # bigger map than a scenario's.
+    wide_city = simcity::app::with_city(saved, simcity::city::make(simcity::app::MAP_WIDE, simcity::app::MAP_TALL, 7, 20000))
+    before_x = simcity::app::state(wide_city).origin_x
+    before_y = simcity::app::state(wide_city).origin_y
+    game.window.id.Rwindow_inject_key(raven::window::R_KEY_RIGHT, 1, 0)
+    stepped = simcity::app::read_keys(wide_city)
+    after_x = simcity::app::state(stepped).origin_x
+    after_y = simcity::app::state(stepped).origin_y
+    held = simcity::app::read_keys(stepped)
+    still_x = simcity::app::state(held).origin_x
+    game.window.id.Rwindow_inject_key(raven::window::R_KEY_RIGHT, 0, 0)
+    released = simcity::app::read_keys(held)
+    let_go = simcity::app::state(released).origin_x
+    sideways = if after_x == before_x + simcity::app::VIEW_STEP_ACROSS and after_y == before_y:
+        1
+    else:
+        0
+    moved = if after_x > before_x:
+        1
+    else:
+        0
+    once = if still_x == after_x and let_go == after_x:
+        1
+    else:
+        0
     # The map must be an image widget: the texture is uploaded into one, and a
     # container in its place takes the upload silently and draws nothing.
     kind = raven::widget::Rwidget_get_type(game.map.id)
@@ -125,6 +201,13 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
     # window is measured and the palette's own bottom edge is compared with it:
     # a palette that wants more room than the map's row has overflows the
     # window, and its lower controls are unreachable.
+    # The palette must fit inside the window. A control laid out below the
+    # window's bottom edge is never drawn and can never be clicked, so two
+    # things are measured: where the palette's own bottom edge lands, and
+    # whether its controls want more room than the row beside the map has.
+    # The second is the one with teeth: the palette that made the lower half of
+    # the palette unreachable wanted 486 points in a 304-point row, and this
+    # figure answered 0 then.
     window_size = raven::size(game.window):
         on NonFiniteFloat:
             raven::Size {width: 0, height: 0}
@@ -134,8 +217,21 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
         1
     else:
         0
+    wants = simcity::screen::wish(game.tools):
+        on IndexNotFound:
+            [0.0, 0.0]
+        on NativeViewNull:
+            [0.0, 0.0]
+        on simcity::screen::OutOfRange:
+            [0.0, 0.0]
+    wanted = whole(wants.get(1, 0.0))
+    room = whole(tools.height)
+    room_enough = if wanted <= room:
+        1
+    else:
+        0
     raven::stop()
-    ["the map is ".concat(std::int::to_string(wide)).append_char(',').append_char(' ').concat(std::int::to_string(tall)), "corners reachable ".concat(std::int::to_string(corners)), "spent ", std::int::to_string(spent), "roads in the viewport ".concat(std::int::to_string(roads)), "the inspector says: ".concat(note), "the map is an image widget ".concat(std::int::to_string(drawn)), "the palette fits the window ".concat(std::int::to_string(fits))]
+    ["the map is ".concat(std::int::to_string(wide)).append_char(',').append_char(' ').concat(std::int::to_string(tall)), "corners reachable ".concat(std::int::to_string(corners)), "spent ", std::int::to_string(spent), "roads in the viewport ".concat(std::int::to_string(roads)), "the inspector says: ".concat(note), "the map is an image widget ".concat(std::int::to_string(drawn)), "the palette fits the window ".concat(std::int::to_string(fits)), "the palette has room ".concat(std::int::to_string(room_enough)).append_char(' ').concat(std::int::to_string(wanted)).append_char('/').concat(std::int::to_string(room)), "the save said: ".concat(said), "after loading, the road is back: ".concat(told_load), "the load gave back the same money ".concat(std::int::to_string(same_money)), "the same roads ".concat(std::int::to_string(same_roads)), "the same month ".concat(std::int::to_string(same_month)), "the arrow key moved the view ".concat(std::int::to_string(moved)), "by one step at a time ".concat(std::int::to_string(sideways)), "and moved it once ".concat(std::int::to_string(once)).append_char(' ').concat(std::int::to_string(before_x)).concat(dash()).concat(std::int::to_string(after_x)).concat(dash()).concat(std::int::to_string(still_x)).append_char(' ').concat(std::int::to_string(before_y)).concat(dash()).concat(std::int::to_string(after_y)), "a click scrolled the view to ".concat(std::int::to_string(simcity::app::state(loaded).origin_x)).append_char(',').append_char(' ').concat(std::int::to_string(simcity::app::state(loaded).origin_y))]
 
 result = main():
     on raven::RavenFailed failure:

@@ -9,12 +9,14 @@ import std::str
 import simcity::app
 import simcity::city
 import simcity::screen
+import simcity::store
 
 with context raven::create()
 with context simcity::screen::create()
+with context simcity::store::create()
 
 fn main() -> str:
-    town = simcity::city::make(48, 48, 4242, 20000)
+    town = simcity::city::make(simcity::app::MAP_WIDE, simcity::app::MAP_TALL, 4242, 20000)
     ended = simcity::app::start(town, raven::desktop()):
         on NonFiniteFloat:
             "a figure Raven reported is not a number"

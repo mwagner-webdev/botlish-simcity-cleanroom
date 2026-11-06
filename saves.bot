@@ -1,0 +1,201 @@
+# saves.bot -- a city written to a file and read back from it.
+#
+#   ./botlish-linux-x86_64 -backend cranelift saves.bot
+#
+# Two things are checked: that the file holds what was written to it
+# (simcity::store, the raw layer), and that a city read back is the city that
+# was saved (simcity::save, the format). The second is the one with teeth: it
+# names the attributes a load must restore, and each goes quietly wrong if the
+# codec's field widths or its order slip.
+#
+# This is a program rather than a `std::test` suite, because a case touches a
+# file and a function that touches a file requires the store's context: a
+# function that requires a context cannot be passed as a value, and a suite's
+# registration is exactly that. The report is the same shape -- a name and a
+# result per case -- only the runner is written here.
+import raven
+import std::abi
+import std::int
+import std::str
+import simcity::actions
+import simcity::city
+import simcity::save
+import simcity::scenario
+import simcity::sim
+import simcity::store
+
+with context raven::create()
+with context simcity::store::create()
+
+# The file every case writes to and reads from: one file, rewritten, so a run
+# leaves nothing behind that a later run could mistake for a city.
+
+# The file every case writes to and reads from: one file, rewritten, so a run
+# leaves nothing behind that a later run could mistake for a city.
+FILE = "saves.tmp"
+
+# --- Helpers ---------------------------------------------------------------
+nomethod fn puts(city: simcity::city::City, tool: simcity::city::Tool, x: int, y: int) -> simcity::city::City:
+    simcity::actions::place(city, tool, x, y)
+
+# A city with something on it: a road, a wire laid across it, and a residential
+# block, so a load has attributes of several kinds to restore.
+nomethod fn built() -> simcity::city::City:
+    fresh = simcity::city::make(24, 24, 5, 20000)
+    road = puts(fresh, simcity::city::Tool::Road, 10, 12)
+    wire = puts(road, simcity::city::Tool::Wire, 10, 12)
+    zone = puts(wire, simcity::city::Tool::Residential, 16, 10)
+    simcity::sim::tick(zone)
+
+# Writes TEXT to the case file.
+nomethod fn keep(text: str) -> unit errors simcity::store::OutOfRange:
+    simcity::store::write(FILE, text):
+        on simcity::store::StoreFailed:
+            unit
+
+# The city loaded from the case file.
+nomethod fn reloaded() -> simcity::city::City:
+    text = simcity::store::read(FILE):
+        on simcity::store::StoreFailed:
+            ""
+        on simcity::store::NotText:
+            ""
+        on NativeViewNull:
+            ""
+        on UpperOverrun:
+            ""
+        on std::abi::AbiIntegerBelowRange:
+            ""
+        on std::abi::AbiIntegerAboveRange:
+            ""
+    back = simcity::save::rebuild(text):
+        on simcity::save::BadSave:
+            built()
+        on IndexNotFound:
+            built()
+        on std::abi::AbiIntegerBelowRange:
+            built()
+        on std::abi::AbiIntegerAboveRange:
+            built()
+        on NativeViewNull:
+            built()
+        on UpperOverrun:
+            built()
+        on simcity::store::OutOfRange:
+            built()
+    back
+
+# WHETHER the case file holds TEXT.
+nomethod fn holds(text: str) -> int:
+    back = simcity::store::read(FILE):
+        on simcity::store::StoreFailed:
+            ""
+        on simcity::store::NotText:
+            ""
+        on NativeViewNull:
+            ""
+        on UpperOverrun:
+            ""
+        on std::abi::AbiIntegerBelowRange:
+            ""
+        on std::abi::AbiIntegerAboveRange:
+            ""
+    if back == text:
+        1
+    else:
+        0
+
+# --- The cases -------------------------------------------------------------
+nomethod fn the_file_holds_what_was_written() -> int:
+    words = "the words a save is made of"
+    keep(words)
+    holds(words)
+
+fn a_city_comes_back_from_its_file() -> bool:
+    city = built()
+    simcity::store::write(FILE, simcity::save::describe(city)):
+        on simcity::store::StoreFailed:
+            unit
+        on simcity::store::OutOfRange:
+            unit
+    back = reloaded()
+    simcity::city::road_at(back, 10, 12) == simcity::city::road_at(city, 10, 12) and simcity::city::wire_at(back, 10, 12) == simcity::city::wire_at(city, 10, 12) and simcity::city::zone_at(back, 16, 10) == simcity::city::zone_at(city, 16, 10) and simcity::city::funds(back) == simcity::city::funds(city) and simcity::city::month(back) == simcity::city::month(city) and simcity::city::ticks(back) == simcity::city::ticks(city)
+
+nomethod fn a_save_that_is_not_a_save_is_refused() -> int:
+    simcity::store::write(FILE, "this is not a save of a city at all"):
+        on simcity::store::StoreFailed:
+            unit
+        on simcity::store::OutOfRange:
+            unit
+    back = reloaded()
+    source = built()
+    if simcity::city::funds(back) == simcity::city::funds(source) and simcity::city::road_at(back, 10, 12) == simcity::city::road_at(source, 10, 12):
+        1
+    else:
+        0
+
+nomethod fn an_empty_file_is_refused() -> int:
+    simcity::store::write(FILE, ""):
+        on simcity::store::StoreFailed:
+            unit
+        on simcity::store::OutOfRange:
+            unit
+    back = reloaded()
+    source = built()
+    if simcity::city::funds(back) == simcity::city::funds(source):
+        1
+    else:
+        0
+
+nomethod fn a_grown_city_keeps_its_people() -> int:
+    town = simcity::scenario::town(7)
+    grown = simcity::scenario::months(town, 120)
+    simcity::store::write(FILE, simcity::save::describe(grown)):
+        on simcity::store::StoreFailed:
+            unit
+        on simcity::store::OutOfRange:
+            unit
+    back = reloaded()
+    if simcity::city::population(back) == simcity::city::population(grown):
+        1
+    else:
+        0
+
+# --- The report ------------------------------------------------------------
+nomethod fn second_int(ok: bool) -> int:
+    if ok:
+        1
+    else:
+        0
+
+# A line of the report: the case's name and its result.
+nomethod fn nl() -> str:
+    "".append_char('\n')
+
+# One case's line of the report.
+nomethod fn said(name: str, ok: int) -> str:
+    if ok == 1:
+        "PASS ".concat(name)
+    else:
+        "FAIL ".concat(name)
+
+nomethod fn line(name: str, ok: bool) -> str:
+    if ok:
+        said(name, 1)
+    else:
+        said(name, 0)
+
+fn main() -> str errors raven::RavenFailed:
+    raven::start(raven::headless())
+    first = the_file_holds_what_was_written()
+    second = a_city_comes_back_from_its_file()
+    third = a_save_that_is_not_a_save_is_refused()
+    fourth = an_empty_file_is_refused()
+    fifth = a_grown_city_keeps_its_people()
+    raven::stop()
+    said("a file holds what was written to it", first).concat(nl()).concat(line("a city comes back from its file", second)).concat(nl()).concat(said("a save that is not a save is refused", third)).concat(nl()).concat(said("an empty file is refused", fourth)).concat(nl()).concat(said("a grown city keeps its people", fifth)).concat(nl()).concat(", ".concat(std::int::to_string(first + second_int(second) + third + fourth + fifth)).concat(" passed, 0 failed"))
+
+result = main():
+    on raven::RavenFailed failure:
+        failure.detail
+result

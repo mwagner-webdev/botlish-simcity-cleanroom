@@ -71,9 +71,21 @@ nomethod fn built() -> raven::Widget:
 # How fast the city runs, and the two things the player opens.
 nomethod fn others() -> raven::Widget:
     tempos = raven::hbox().add(action("Pause", "tempo.pause")).add(action("Month", "tempo.month")).add(action("Rush", "tempo.rush"))
-    raven::vbox().add(tempos).add(action("Budget", "budget")).add(action("New town", "new")).add(raven::label("Click to build, drag")).add(raven::label("to run a line, arrow")).add(raven::label("keys move the view."))
+    raven::vbox().add(tempos).add(action("Budget", "budget")).add(action("New town", "new")).add(action("Save", "save")).add(action("Load", "load")).add(raven::label("Click to build, drag")).add(raven::label("to run a line, arrow")).add(raven::label("keys move the view."))
 
 # The palette: three columns beside each other, so no column is deeper than
 # the map is tall.
 nomethod fn column() -> raven::Widget:
     raven::hbox().add(grounds()).add(built()).add(others())
+
+# One character written as a string: Botlish writes a single character as a
+# character literal, and every label Raven takes is a string, so the four
+# scroll buttons' glyphs go through here.
+nomethod fn one(c: UnicodeChar) -> str:
+    "".append_char(c)
+
+# The view's scroll buttons: the map is four times the viewport, and Raven's
+# event bridge reports named actions but not keys, so the view moves by four
+# buttons a player can always reach rather than by a key nothing hears.
+nomethod fn view_move() -> raven::Widget:
+    raven::hbox().add(action(one('<'), "view.left")).add(action(one('^'), "view.up")).add(action(one('v'), "view.down")).add(action(one('>'), "view.right"))

@@ -1,0 +1,348 @@
+# simcity::save -- a city as text, and text as a city.
+#
+# A save file is text and not bytes, for the reason a spreadsheet is text and
+# not bytes: a file a player can read is a file a player can check, and one
+# that can be read again is one that can be tested. The whole file is
+# fixed-width decimal fields, which is the form a reader can take apart by
+# position alone -- Botlish has no split and no parse, so a format that needs
+# neither is the format to have.
+#
+# The layout, in order:
+#
+#   "SIMCITY1\n"                 the magic, and one newline
+#   WIDTH    4 digits
+#   HEIGHT   4 digits
+#   BANK     14 slots, 8 digits each: the value plus 10,000,000, so a slot may
+#             hold a negative balance and still be one fixed-width field
+#   15 tile attributes in a fixed order, each a 3-character tag, a newline, and
+#   then one fixed-width field per tile of the map
+#
+# The tags are the order's own check: a reader that expected land and found the
+# zone's tag has a file that is not this format, and says so rather than
+# reading a city that is quietly wrong.
+#
+# A save holds every attribute, not only the ones a player made. Power, road
+# access and the environment are recomputed by the next month of the
+# simulation, but a city loaded before that month should look exactly like the
+# one that was saved, and a file that holds half a city is half a feature.
+import std::int
+import std::list
+import std::mutable_array
+import std::str
+
+import type simcity::city::Tool
+import simcity::actions
+import simcity::city
+
+# Why a file was not a city.
+error BadSave
+
+# The magic every save begins with.
+
+# The magic every save begins with.
+
+# The magic every save begins with.
+# The magic every save begins with.
+MAGIC = "SIMCITY1\n"
+
+# The offset a bank slot is written with, and how many digits a slot takes. A
+# slot holds the generator's state, which is a 32-bit number, and a treasury
+# that may be negative, so a field of eleven digits is written with a
+# 10,000,000,000 offset: that holds any slot from -10 billion to 89 billion,
+# which is every number a city keeps and room besides.
+BANK_DIGITS = 11
+
+BANK_OFFSET = 10000000000
+
+# The maps a save can hold: 9,999 tiles to a side, which is far past any map
+# this game makes and still four digits.
+WIDE_DIGITS = 4
+
+# How many bank slots a city has.
+nomethod fn slots() -> int:
+    simcity::city::BANK_SIZE
+
+# --- Fixed-width decimal ---------------------------------------------------
+#
+# A value is written as its digits with zeroes in front, and read back as ten
+# times what it has plus a digit. Both need no delimiter, so neither needs a
+# splitter or a parser.
+
+# --- Fixed-width decimal ---------------------------------------------------
+#
+# A value is written as its digits with zeroes in front, and read back as ten
+# times what it has plus a digit. Both need no delimiter, so neither needs a
+# splitter or a parser.
+# --- Fixed-width decimal ---------------------------------------------------
+#
+# A value is written as its digits with zeroes in front, and read back as ten
+# times what it has plus a digit. Both need no delimiter, so neither needs a
+# splitter or a parser.
+# WHETHER the digit C is one of the ten.
+nomethod fn is_digit(c: UnicodeChar) -> bool:
+    if c == '0':
+        true
+    elif c == '1':
+        true
+    elif c == '2':
+        true
+    elif c == '3':
+        true
+    elif c == '4':
+        true
+    elif c == '5':
+        true
+    elif c == '6':
+        true
+    elif c == '7':
+        true
+    elif c == '8':
+        true
+    elif c == '9':
+        true
+    else:
+        false
+
+# The value of the digit C, or 0 for anything else.
+nomethod fn digit_of(c: UnicodeChar) -> int:
+    if c == '1':
+        1
+    elif c == '2':
+        2
+    elif c == '3':
+        3
+    elif c == '4':
+        4
+    elif c == '5':
+        5
+    elif c == '6':
+        6
+    elif c == '7':
+        7
+    elif c == '8':
+        8
+    elif c == '9':
+        9
+    else:
+        0
+
+# WIDTH zeroes, and then DIGITS.
+nomethod fn filled(width: int, digits: str) -> str:
+    if width <= 0:
+        digits
+    else:
+        filled(width - 1, "".append_char('0').concat(digits))
+
+# V as a field of WIDTH digits, appended to TEXT. V must be 0 <= V < 10^WIDTH.
+nomethod fn put_int(text: str, v: int, width: int) -> str:
+    digits = std::int::to_string(v)
+    short = width - std::str::length(digits)
+    if short <= 0:
+        text.concat(digits)
+    else:
+        text.concat(filled(short, digits))
+
+nomethod fn take_from(text: str, at: int, width: int, made: int) -> int:
+    if width <= 0:
+        made
+    else:
+        here = text.char_at(at):
+            on IndexNotFound:
+                '0'
+        take_from(text, at + 1, width - 1, made * 10 + digit_of(here))
+
+nomethod fn ceiling_from(width: int, place: int, made: int) -> int:
+    if width <= 0:
+        made
+    else:
+        ceiling_from(width - 1, place * 10, made + 9 * place)
+
+# --- The bank --------------------------------------------------------------
+# One bank slot as a fixed-width field: the value plus the offset, so a
+# negative balance is a positive number in the field.
+nomethod fn put_slot(text: str, city: simcity::city::City, slot: int) -> str:
+    put_int(text, simcity::city::bank_at(city, slot) + BANK_OFFSET, BANK_DIGITS)
+
+# The 14 bank slots of a save, one field each.
+nomethod fn put_bank(text: str, city: simcity::city::City, slot: int) -> str:
+    if slot >= slots():
+        text
+    else:
+        put_bank(put_slot(text, city, slot), city, slot + 1)
+
+# --- The tile attributes ---------------------------------------------------
+
+# --- The tile attributes ---------------------------------------------------
+# --- Reading a save back ---------------------------------------------------
+# WHETHER TEXT begins with the magic, tag and all.
+# The one place a save is refused: every check that fails says the same thing,
+# so it raises here and nowhere else.
+nomethod fn refused(ok: bool) -> unit errors BadSave:
+    if ok:
+        unit
+    else:
+        fail BadSave
+
+nomethod fn has_header(text: str, at: int) -> bool:
+    if at >= std::str::length(MAGIC):
+        true
+    else:
+        here = text.char_at(at):
+            on IndexNotFound:
+                ' '
+        there = MAGIC.char_at(at):
+            on IndexNotFound:
+                ' '
+        if here == there:
+            has_header(text, at + 1)
+        else:
+            false
+
+nomethod fn has_tag_at(text: str, tag: str, at: int, i: int) -> bool:
+    if i >= std::str::length(tag):
+        true
+    else:
+        here = text.char_at(at):
+            on IndexNotFound:
+                ' '
+        there = tag.char_at(i):
+            on IndexNotFound:
+                ' '
+        if here == there:
+            has_tag_at(text, tag, at + 1, i + 1)
+        else:
+            false
+
+# The WIDTH-digit field of TEXT at AT, as a number.
+nomethod fn take_int(text: str, at: int, width: int) -> int:
+    take_from(text, at, width, 0)
+
+# The largest value a field of WIDTH digits holds.
+nomethod fn ceiling(width: int) -> int:
+    ceiling_from(width, 1, 0)
+
+# V held in a field of WIDTH digits: clamped, because a value past the field's
+# ceiling would widen the file and every field after it would then be read from
+# the wrong position. In this game the only quantity that could reach the
+# ceiling is the smoke or the crime of a heavily built city, and clamping it
+# costs one point of smoke against a corrupt save.
+nomethod fn held(v: int, width: int) -> int:
+    top = ceiling(width) - 1
+    if v < 0:
+        0
+    elif v > top:
+        top
+    else:
+        v
+
+# --- The bank --------------------------------------------------------------
+
+# --- The bank --------------------------------------------------------------
+# --- The tile attributes ---------------------------------------------------
+# One tile's value in one attribute, as a fixed-width field.
+nomethod fn put_value(text: str, v: int, width: int) -> str:
+    put_int(text, held(v, width), width)
+
+# The whole attribute FIELD, one field per tile.
+nomethod fn put_field(text: str, field: MutableArray[int], i: int, total: int, width: int) -> str:
+    if i >= total:
+        text
+    else:
+        here = if i < 0 or i >= field.capacity():
+            0
+        else:
+            field.at(i)
+        put_field(put_value(text, here, width), field, i + 1, total, width)
+
+# A city's whole map as text: the magic, the size, the bank, and the fifteen
+# attributes in the order a reader puts them back.
+nomethod fn describe(city: simcity::city::City) -> str:
+    total = city.width * city.height
+    head = MAGIC.concat(put_int("", city.width, WIDE_DIGITS)).concat(put_int("", city.height, WIDE_DIGITS))
+    money = put_bank(head, city, 0)
+    one = put_field("".concat("lnd\n"), city.grid.land, 0, total, 2)
+    two = put_field(one.concat("zon\n"), city.grid.zone, 0, total, 2)
+    three = put_field(two.concat("anc\n"), city.grid.anchor, 0, total, 4)
+    four = put_field(three.concat("rod\n"), city.grid.road, 0, total, 1)
+    five = put_field(four.concat("wir\n"), city.grid.wire, 0, total, 1)
+    six = put_field(five.concat("rai\n"), city.grid.rail, 0, total, 1)
+    seven = put_field(six.concat("lvl\n"), city.grid.level, 0, total, 2)
+    eight = put_field(seven.concat("pow\n"), city.grid.powered, 0, total, 1)
+    nine = put_field(eight.concat("pol\n"), city.grid.pollution, 0, total, 4)
+    ten = put_field(nine.concat("val\n"), city.grid.value, 0, total, 4)
+    eleven = put_field(ten.concat("cri\n"), city.grid.crime, 0, total, 4)
+    twelve = put_field(eleven.concat("fir\n"), city.grid.fire, 0, total, 4)
+    thirteen = put_field(twelve.concat("job\n"), city.grid.jobs, 0, total, 4)
+    fourteen = put_field(thirteen.concat("pop\n"), city.grid.pop, 0, total, 4)
+    fifteen = put_field(fourteen.concat("acc\n"), city.grid.access, 0, total, 1)
+    money.concat(fifteen)
+
+# --- Reading a save back ---------------------------------------------------
+
+# --- Reading a save back ---------------------------------------------------
+# WHETHER the tag at AT of TEXT is TAG.
+nomethod fn has_tag(text: str, tag: str, at: int) -> bool:
+    has_tag_at(text, tag, at, 0)
+
+# Reads one attribute into FIELD: its tag and its newline first, then one
+# fixed-width field per tile. Answers the position after the last of them.
+nomethod fn take_field(text: str, at: int, tag: str, place field: MutableArray[int], i: int, total: int, width: int) -> int:
+    if i == 0:
+        if has_tag(text, tag, at):
+            take_field(text, at + std::str::length(tag), tag, field, 1, total, width)
+        else:
+            -1
+    elif i > total:
+        at
+    else:
+        simcity::actions::put(field, i - 1, take_int(text, at, width))
+        take_field(text, at + width, tag, field, i + 1, total, width)
+
+# The city's bank, read back from the save's own fields: the map is rebuilt
+# from its attributes, and the money, the clock and the demand are what the
+# bank held.
+nomethod fn bank_of(text: str, at: int, place city: simcity::city::City, slot: int) -> unit:
+    if slot >= slots():
+        unit
+    else:
+        value = take_int(text, at + slot * BANK_DIGITS, BANK_DIGITS) - BANK_OFFSET
+        simcity::city::bank_put(city, slot, value)
+        bank_of(text, at, city, slot + 1)
+
+# The city a save's text describes, or why it was not one.
+nomethod fn rebuild(text: str) -> simcity::city::City errors BadSave, IndexNotFound:
+    refused(has_header(text, 0))
+    wide = take_int(text, 9, WIDE_DIGITS)
+    tall = take_int(text, 9 + WIDE_DIGITS, WIDE_DIGITS)
+    refused(wide >= 3 and tall >= 3 and wide <= 9999 and tall <= 9999)
+    at = 2 * WIDE_DIGITS + std::str::length(MAGIC)
+    total = wide * tall
+    # The bank comes before the map, and the seed and the starting funds are
+    # two of its slots: a saved city keeps the land it was made on and the
+    # money it had, so a city reads back as the city that was saved.
+    # The map is made with any seed and any money: both the land and the bank
+    # are replaced from the save's own fields below, so what make lays down
+    # here is only a grid of the right size to read into.
+    city = simcity::city::make(wide, tall, 1, 0)
+    grid = city.grid
+    one = take_field(text, at + slots() * BANK_DIGITS, "lnd\n", grid.land, 0, total, 2)
+    two = take_field(text, one, "zon\n", grid.zone, 0, total, 2)
+    three = take_field(text, two, "anc\n", grid.anchor, 0, total, 4)
+    four = take_field(text, three, "rod\n", grid.road, 0, total, 1)
+    five = take_field(text, four, "wir\n", grid.wire, 0, total, 1)
+    six = take_field(text, five, "rai\n", grid.rail, 0, total, 1)
+    seven = take_field(text, six, "lvl\n", grid.level, 0, total, 2)
+    eight = take_field(text, seven, "pow\n", grid.powered, 0, total, 1)
+    nine = take_field(text, eight, "pol\n", grid.pollution, 0, total, 4)
+    ten = take_field(text, nine, "val\n", grid.value, 0, total, 4)
+    eleven = take_field(text, ten, "cri\n", grid.crime, 0, total, 4)
+    twelve = take_field(text, eleven, "fir\n", grid.fire, 0, total, 4)
+    thirteen = take_field(text, twelve, "job\n", grid.jobs, 0, total, 4)
+    fourteen = take_field(text, thirteen, "pop\n", grid.pop, 0, total, 4)
+    fifteen = take_field(text, fourteen, "acc\n", grid.access, 0, total, 1)
+    refused(fifteen >= 0)
+    # Every slot of the bank, after the map: the treasury, the clock, the
+    # demand, the year's figures, and the generator's state. A save whose clock
+    # restarted at month one would not be the city that was saved.
+    bank_of(text, at, city, 0)
+    simcity::city::City {width: wide, height: tall, grid: grid, bank: city.bank}
