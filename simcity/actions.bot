@@ -132,13 +132,25 @@ nomethod fn rows_clear?(city: simcity::city::City, x: int, y: int, row: int, col
 nomethod fn block_clear?(city: simcity::city::City, x: int, y: int) -> bool:
     rows_clear?(city, x, y, -1, -1)
 
+# WHETHER the tile takes a line of TOOL: no water, no zone on it, and nothing
+# standing that the line may not be laid over. A line crosses another line by
+# being laid on it, so a wire over a road is a tile holding both rather than a
+# refusal -- which is the whole point of `line_fits?`.
+nomethod fn line_clear?(city: simcity::city::City, tool: Tool, x: int, y: int) -> bool:
+    if simcity::city::terrain(city, x, y) == simcity::city::WATER:
+        false
+    elif simcity::city::zone_at(city, x, y) != simcity::city::NONE:
+        false
+    else:
+        simcity::city::line_fits?(city, tool, x, y)
+
 # WHETHER the ground the tool needs is there: the tile for a line, the whole
 # 3 x 3 block for a zone, whatever the bulldozer can take away.
 nomethod fn room?(city: simcity::city::City, tool: Tool, x: int, y: int) -> bool:
     if not simcity::city::inside?(city, x, y):
         false
     elif simcity::city::line_tool?(tool):
-        clear?(city, x, y)
+        line_clear?(city, tool, x, y)
     elif tool == Tool::Bulldoze:
         clearable?(city, x, y)
     else:

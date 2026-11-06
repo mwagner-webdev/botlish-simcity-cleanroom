@@ -134,6 +134,36 @@ the treasury leaves the city unchanged and says so. But a city may go into
 deficit on upkeep, and once the treasury is negative no zone block grows --
 the one permanent consequence of overspending.
 
+## Crossings
+
+A tile's lines are one array each, so a crossing is a tile holding two of them
+rather than a third attribute, and what may share a tile is the whole rule:
+
+| what is already on the tile | a road | a power line | a rail |
+|---|---|---|---|
+| a road | joined | **crosses** | refused |
+| a power line | **crosses** | joined | **crosses** |
+| a rail | refused | **crosses** | joined |
+
+A power line is the one line that crosses everything, which is why it is the
+line that makes zoning in the original a puzzle: it has to reach every block,
+and the roads it must cross are laid wherever the player likes. A rail may
+not cross a road at all -- a train does not share a carriageway with a car --
+and the refusal says so, because "the ground is not clear" on a tile that looks
+empty is the kind of answer that makes a player click the same tile for a
+minute. A line laid on a line of its own kind joins it rather than making a
+second, so dragging a wire along an existing wire costs one wire's price.
+
+Both networks run through a crossing: power conducts along the wire under the
+carriageway, and traffic travels along the road over the wire, so a block at
+the far end of a run of road is served through the tile the power line crosses.
+
+A crossing is drawn with the carriageway's colour and the wire as a stripe of
+its own ink along it, in the direction the wire runs -- which is read from the
+wire's neighbours, because a stripe that stopped at the road would make the
+line look broken. `crossings.bot` tests the rules, both networks through a
+crossing, and the stripe's pixels.
+
 ## Disasters
 
 Not implemented. There is no fire, flood or earthquake beyond the fire risk a
@@ -169,7 +199,8 @@ as its letter sets.
 
 ## What is left out
 
-* Rail works as a road does, for connectivity, and has no distinct behaviour.
+* Rail works as a road does, for connectivity, and has no distinct behaviour
+  beyond the one rule that matters: it may not cross a road.
 * There are no zones' distinct uses of land beyond the zoning categories.
 * There is no water supply, no schools, no hospitals, no stadiums, no ports and
   no airports.

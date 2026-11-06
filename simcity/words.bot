@@ -141,9 +141,16 @@ nomethod fn zone_name(kind: int) -> str:
     else:
         "Park"
 
-# Why a placement did not happen, for the line that tells the player.
-nomethod fn show_refusal(outcome: simcity::actions::Placed) -> str:
-    if outcome == simcity::actions::Placed::Poor:
+# Why a placement did not happen, for the line that tells the player. The
+# refusal that needs its own words is the crossing the original forbids: the
+# tile looks empty, so "not clear" would leave a player guessing.
+nomethod fn show_refusal(city: simcity::city::City, tool: Tool, x: int, y: int, outcome: simcity::actions::Placed) -> str:
+    if outcome == simcity::actions::Placed::Blocked and simcity::city::line_tool?(tool) and not simcity::city::line_fits?(city, tool, x, y):
+        if tool == Tool::Rail:
+            "A rail may not cross a road."
+        else:
+            "A rail is already on that tile."
+    elif outcome == simcity::actions::Placed::Poor:
         "Not enough funds for that."
     elif outcome == simcity::actions::Placed::Blocked:
         "The ground is not clear there."

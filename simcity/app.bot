@@ -505,7 +505,7 @@ nomethod fn read_mouse(game: Game) -> Game errors NonFiniteFloat:
                 built = with_city(game, simcity::actions::place(s.city, s.tool, where.x, where.y))
                 with_cursor(built, where.x, where.y, button)
             else:
-                said = with_message(game, simcity::words::show_refusal(outcome))
+                said = with_message(game, simcity::words::show_refusal(s.city, s.tool, where.x, where.y, outcome))
                 with_cursor(said, where.x, where.y, button)
     else:
         with_cursor(game, where.x, where.y, button)

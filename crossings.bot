@@ -1,0 +1,254 @@
+# crossings.bot -- the lines that may share a tile.
+#
+#   ./botlish-linux-x86_64 -backend cranelift crossings.bot
+#
+# A tile's lines are one array each, so a crossing is a tile holding two of
+# them, and what may share a tile is a rule of its own. In the game being
+# copied a power line crosses a road and a rail, and a rail may not cross a
+# road: a train does not share a carriageway with a car, and it is the one
+# refusal worth a message of its own.
+#
+# This suite asks three things of a crossing: that it may be built, that both
+# networks still run through it afterwards -- power under the road, and traffic
+# over it -- and that the other pair is still refused.
+import std::byte
+import std::list
+import std::test
+import simcity::actions
+import simcity::city
+import simcity::render
+import simcity::sim
+
+with context std::test::suite()
+
+# What a case measured.
+struct Crossing:
+    built: int
+    wire: int
+    road: int
+    rail: int
+    powered: int
+    served: int
+    refused: int
+    spent: int
+
+nomethod fn blank() -> Crossing:
+    Crossing {built: 0, wire: 0, road: 0, rail: 0, powered: 0, served: 0, refused: 0, spent: 0}
+
+# The expected reading of a crossing case.
+nomethod fn reading(built: int, wire: int, road: int, rail: int, powered: int, served: int, refused: int, spent: int) -> Crossing:
+    Crossing {built: built, wire: wire, road: road, rail: rail, powered: powered, served: served, refused: refused, spent: spent}
+
+# What the second placement left the treasury after the first had already been
+# paid for: the cost of the refusal itself, which is nothing. `crossed` above
+# answers the total of both lines, so a refusal case needs its own fixture.
+nomethod fn after_first(first: simcity::city::City, second: simcity::city::City) -> int:
+    simcity::city::funds(first) - simcity::city::funds(second)
+
+# --- Helpers ---------------------------------------------------------------
+
+nomethod fn puts(city: simcity::city::City, tool: simcity::city::Tool, x: int, y: int) -> simcity::city::City:
+    simcity::actions::place(city, tool, x, y)
+
+# A run of road from X0 to X1 along the row Y: the network only connects where
+# it reaches the edge of the map, so a case about traffic needs a run that
+# starts at the border.
+nomethod fn road_run(city: simcity::city::City, x0: int, x1: int, y: int) -> simcity::city::City:
+    if x0 > x1:
+        city
+    else:
+        road_run(puts(city, simcity::city::Tool::Road, x0, y), x0 + 1, x1, y)
+
+# A run of wire down the column X, from row Y0 to Y1: the network runs out of a
+# plant and along its line, so a case about power needs a line that crosses
+# something in the middle of it.
+nomethod fn wire_column(city: simcity::city::City, x: int, y0: int, y1: int) -> simcity::city::City:
+    if y0 > y1:
+        city
+    else:
+        wire_column(puts(city, simcity::city::Tool::Wire, x, y0), x, y0 + 1, y1)
+
+# --- The drawing of a crossing ---------------------------------------------
+#
+# A crossing has to be visible, or the player who laid a wire across a road
+# cannot tell that it is there: the tile is drawn with the carriageway's colour
+# and the wire as a stripe of its own ink. The count below is WIRE_INK's three
+# channels, which the renderer packs as R * 65536 + G * 256 + B.
+
+# How many pixels of one colour the rendered tile carries: four bytes a pixel,
+# so the walk steps by four and a pixel of the colour is one that matches.
+nomethod fn ink_pixels(pixels: List[std::byte::Byte], r: int, g: int, b: int, i: int) -> int errors IndexNotFound, std::byte::AboveRange, std::byte::BelowRange:
+    if i + 3 >= std::list::length(pixels):
+        0
+    else:
+        rest = ink_pixels(pixels, r, g, b, i + 4)
+        same = pixels.at(i) == std::byte::from_int(r) and pixels.at(i + 1) == std::byte::from_int(g) and pixels.at(i + 2) == std::byte::from_int(b) and pixels.at(i + 3) == std::byte::from_int(255)
+        if same:
+            rest + 1
+        else:
+            rest
+
+# How many pixels of the wire's ink the one tile (X, Y) carries: the tile is
+# rendered on its own, so a pixel of the wire's ink belongs to its stripe.
+nomethod fn stripe_of(city: simcity::city::City, x: int, y: int) -> int:
+    pixels = simcity::render::frame(city, x, y, 1, 1, -1):
+        on std::byte::AboveRange:
+            []
+        on std::byte::BelowRange:
+            []
+    counted = ink_pixels(pixels, 96, 92, 88, 0):
+        on IndexNotFound:
+            -1
+        on std::byte::AboveRange:
+            -1
+        on std::byte::BelowRange:
+            -1
+    counted
+
+# What a placement answered, as a number a test can name.
+nomethod fn code(outcome: simcity::actions::Placed) -> int:
+    if outcome == simcity::actions::Placed::Built:
+        1
+    elif outcome == simcity::actions::Placed::Poor:
+        2
+    elif outcome == simcity::actions::Placed::Blocked:
+        3
+    else:
+        4
+
+# A tile that is nothing yet: the ground of every case here.
+nomethod fn bare() -> simcity::city::City:
+    simcity::city::make(24, 24, 5, 20000)
+
+# The crossing built by putting a line of NEW on a tile that already holds
+# FIRST, then ticked once so both networks have run.
+nomethod fn crossed(first: simcity::city::Tool, new: simcity::city::Tool) -> Crossing:
+    ground = bare()
+    one = puts(ground, first, 12, 12)
+    two = puts(one, new, 12, 12)
+    stepped = simcity::sim::tick(two)
+    reading(1, simcity::city::wire_at(stepped, 12, 12), simcity::city::road_at(stepped, 12, 12), simcity::city::rail_at(stepped, 12, 12), simcity::city::powered_at(stepped, 12, 12), simcity::city::access_at(stepped, 12, 12), code(simcity::actions::fits(one, new, 12, 12)), simcity::city::funds(ground) - simcity::city::funds(two))
+
+# The pair the original refuses, in both directions: the tile keeps what it
+# had, and the refusal itself charges nothing.
+nomethod fn refused(first: simcity::city::Tool, new: simcity::city::Tool) -> Crossing:
+    ground = bare()
+    one = puts(ground, first, 12, 12)
+    two = puts(one, new, 12, 12)
+    stepped = simcity::sim::tick(two)
+    reading(3, simcity::city::wire_at(stepped, 12, 12), simcity::city::road_at(stepped, 12, 12), simcity::city::rail_at(stepped, 12, 12), 0, 0, code(simcity::actions::fits(one, new, 12, 12)), after_first(one, two))
+
+# --- The cases -------------------------------------------------------------
+
+# A wire laid along a road crosses it: the tile holds both, and the treasury
+# has paid for both.
+fn a_wire_crosses_a_road() -> Crossing:
+    crossed(simcity::city::Tool::Road, simcity::city::Tool::Wire)
+
+fn a_road_lies_over_a_wire() -> Crossing:
+    crossed(simcity::city::Tool::Wire, simcity::city::Tool::Road)
+
+fn a_wire_crosses_a_rail() -> Crossing:
+    crossed(simcity::city::Tool::Rail, simcity::city::Tool::Wire)
+
+# The pair the original refuses, in both directions.
+fn a_rail_may_not_cross_a_road() -> Crossing:
+    refused(simcity::city::Tool::Road, simcity::city::Tool::Rail)
+
+fn a_road_may_not_cross_a_rail() -> Crossing:
+    refused(simcity::city::Tool::Rail, simcity::city::Tool::Road)
+
+# A wire laid along a wire joins it rather than making a second line, so the
+# tile is one wire and the cost is one wire's.
+nomethod fn joined() -> Crossing:
+    ground = bare()
+    one = puts(ground, simcity::city::Tool::Wire, 12, 12)
+    two = puts(one, simcity::city::Tool::Wire, 12, 12)
+    reading(1, simcity::city::wire_at(two, 12, 12), 0, 0, 0, 0, 1, simcity::city::funds(ground) - simcity::city::funds(two))
+
+fn a_wire_joins_a_wire() -> Crossing:
+    joined()
+
+# Power still runs along a crossing: a plant, a line down to a road the power
+# has to cross, and a block on the far side of it. The crossing is in the
+# middle of the line, so a tile that stopped conducting would leave the block
+# dark.
+fn power_runs_through_a_crossing() -> Crossing:
+    ground = bare()
+    plant = puts(ground, simcity::city::Tool::Coal, 10, 6)
+    wired = wire_column(plant, 10, 8, 14)
+    with_road = road_run(wired, 0, 20, 12)
+    with_zone = puts(with_road, simcity::city::Tool::Residential, 10, 16)
+    stepped = simcity::sim::tick(with_zone)
+    reading(1, simcity::city::wire_at(stepped, 10, 12), simcity::city::road_at(stepped, 10, 12), 0, simcity::city::powered_at(stepped, 10, 16), 0, 0, 0)
+
+# A tile a wire crosses still carries traffic: the same road run, with the zone
+# at the far end of it, so the only way the block can be served is along the
+# carriageway the power line is under.
+fn traffic_still_passes_a_crossing() -> Crossing:
+    ground = bare()
+    with_road = road_run(ground, 0, 20, 12)
+    with_wire = puts(with_road, simcity::city::Tool::Wire, 10, 12)
+    with_zone = puts(with_wire, simcity::city::Tool::Residential, 16, 10)
+    stepped = simcity::sim::tick(with_zone)
+    reading(1, simcity::city::wire_at(stepped, 10, 12), simcity::city::road_at(stepped, 10, 12), 0, 0, simcity::city::access_at(stepped, 16, 11), 0, 0)
+
+# Bulldozing a crossing takes both lines with it, not one of them.
+fn bulldozing_takes_the_whole_crossing() -> Crossing:
+    ground = bare()
+    with_road = puts(ground, simcity::city::Tool::Road, 12, 12)
+    with_wire = puts(with_road, simcity::city::Tool::Wire, 12, 12)
+    cleared = puts(with_wire, simcity::city::Tool::Bulldoze, 12, 12)
+    reading(1, simcity::city::wire_at(cleared, 12, 12), simcity::city::road_at(cleared, 12, 12), 0, 0, 0, 0, simcity::city::funds(with_wire) - simcity::city::funds(cleared))
+
+# The crossing is drawn: a stripe of the wire's own ink across the carriageway,
+# which is CROSS_WIDE texture rows of a TILE-wide tile.
+fn a_crossing_is_drawn() -> Crossing:
+    ground = bare()
+    with_road = puts(ground, simcity::city::Tool::Road, 12, 12)
+    with_wire = puts(with_road, simcity::city::Tool::Wire, 12, 12)
+    reading(1, simcity::city::wire_at(with_wire, 12, 12), simcity::city::road_at(with_wire, 12, 12), 0, 0, 0, 0, stripe_of(with_wire, 12, 12))
+
+# --- The checks ------------------------------------------------------------
+
+nomethod fn both_lines(numbers: Crossing) -> bool:
+    numbers.wire == 1 and numbers.road + numbers.rail == 1 and numbers.refused == 1
+
+nomethod fn keeps_its_own(numbers: Crossing) -> bool:
+    numbers.refused == 3
+
+nomethod fn nothing_charged(numbers: Crossing) -> bool:
+    numbers.spent == 0
+
+nomethod fn still_joined(numbers: Crossing) -> bool:
+    numbers.wire == 1 and numbers.spent == 5
+
+nomethod fn lit(numbers: Crossing) -> bool:
+    numbers.powered == 1
+
+nomethod fn served(numbers: Crossing) -> bool:
+    numbers.served == 1
+
+nomethod fn gone(numbers: Crossing) -> bool:
+    numbers.wire == 0 and numbers.road == 0 and numbers.spent == 1
+
+# The stripe a crossing draws is the wire's ink, and it is CROSS_WIDE rows
+# across the whole tile: the wire is visible where it crosses.
+nomethod fn stripe_drawn(numbers: Crossing) -> bool:
+    numbers.spent == simcity::render::TILE * simcity::render::CROSS_WIDE
+
+nomethod fn register_tests():
+    std::test::holds("a wire crosses a road", "the tile holds both, and both were paid for", both_lines, a_wire_crosses_a_road)
+    std::test::holds("a road lies over a wire", "the tile holds both, and both were paid for", both_lines, a_road_lies_over_a_wire)
+    std::test::holds("a wire crosses a rail", "the tile holds both, and both were paid for", both_lines, a_wire_crosses_a_rail)
+    std::test::holds("a rail may not cross a road", "the road is left as it was", keeps_its_own, a_rail_may_not_cross_a_road)
+    std::test::holds("a road may not cross a rail", "the rail is left as it was", keeps_its_own, a_road_may_not_cross_a_rail)
+    std::test::holds("the refusal costs nothing", "the treasury is untouched", nothing_charged, a_rail_may_not_cross_a_road)
+    std::test::holds("a wire joins a wire", "one tile of wire, and one wire's price", still_joined, a_wire_joins_a_wire)
+    std::test::holds("power runs through a crossing", "the tile across the road is live", lit, power_runs_through_a_crossing)
+    std::test::holds("traffic still passes a crossing", "the block beside the road is served", served, traffic_still_passes_a_crossing)
+    std::test::holds("bulldozing takes the whole crossing", "both lines go, at one tile's price", gone, bulldozing_takes_the_whole_crossing)
+    std::test::holds("a crossing is drawn", "a stripe of the wire's ink across the tile", stripe_drawn, a_crossing_is_drawn)
+
+register_tests()
+std::test::report()

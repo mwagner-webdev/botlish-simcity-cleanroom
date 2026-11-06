@@ -402,6 +402,26 @@ nomethod fn block_inside?(city: City, x: int, y: int) -> bool:
         fold dx from -1 through 1 with intermediate yes ok:
             yes and inside?(city, x + dx, y + dy)
 
+# --- Crossings --------------------------------------------------------------
+#
+# A tile's lines are one array each, so a tile can hold several of them at once
+# and a crossing is a tile with two lines on it rather than a third attribute.
+# What may share a tile is the whole rule: a power line crosses a road and a
+# rail, a road crosses a road, and a rail crosses a rail -- a line laid along
+# one of its own kind simply joins it. The one pair that may not share a tile
+# is a road and a rail, because a train does not share a carriageway with a car
+# in the game being copied, and it is the reason a crossing is worth a function
+# of its own rather than "the tile is empty".
+#
+# WHETHER the line TOOL may be laid on the tile it already holds something of.
+nomethod fn line_fits?(city: City, tool: Tool, x: int, y: int) -> bool:
+    if tool == Tool::Road:
+        rail_at(city, x, y) == 0
+    elif tool == Tool::Rail:
+        road_at(city, x, y) == 0 and rail_at(city, x, y) == 0
+    else:
+        wire_at(city, x, y) == 0
+
 # --- The bank --------------------------------------------------------------
 
 # --- The bank --------------------------------------------------------------

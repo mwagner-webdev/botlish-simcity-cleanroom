@@ -26,6 +26,7 @@ from another language.
       app.bot             the window, the controls, and the loop that runs both
     tests.bot             the headless suite for the city (38 cases)
     labels.bot            the headless suite for the letters on the map (6 cases)
+    crossings.bot         the headless suite for one line crossing another (11 cases)
     gametest.bot          the windowed game, exercised with no display
     sight.bot             the map is drawn, checked on the real renderer
     bench.bot             the deterministic performance report
@@ -62,6 +63,8 @@ A standalone executable beside the program:
 |---|---|
 | choose a tool | click its button on the right |
 | build | click the map; drag to run a road or a line |
+| cross a power line over a road or a rail | lay the wire on the tile the road
+  or rail already holds: the tile keeps both, and power still runs through |
 | move the view | arrow keys |
 | follow the pointer | the tile under it is drawn as a pale preview |
 | read a tile without inspecting it | the single letter it carries: R, C, I the
@@ -81,11 +84,13 @@ and nothing is served; tax to the maximum and what you built walks away.
 
     ./botlish-linux-x86_64 -backend cranelift tests.bot     # the city, 38 cases
     ./botlish-linux-x86_64 -backend cranelift labels.bot    # the map's letters, 6 cases
+    ./botlish-linux-x86_64 -backend cranelift crossings.bot # one line over another, 11 cases
     ./botlish-linux-x86_64 -backend cranelift gametest.bot  # the window, no display
     ./botlish-linux-x86_64 -backend cranelift sight.bot     # the map, on the real renderer
     ./botlish-linux-x86_64 -backend cranelift bench.bot     # the performance report
 
-`tests.bot` prints PASS or FAIL per case and a count, and so does `labels.bot`.
+`tests.bot` prints PASS or FAIL per case and a count, and so does `labels.bot`
+and `crossings.bot`.
 `gametest.bot` drives the same window headlessly and prints the map's size,
 whether all four corners of the map are reachable, what a click spent, what the
 inspector says, that the map is an image widget, and that the palette's bottom

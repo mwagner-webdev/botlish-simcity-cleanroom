@@ -9,6 +9,7 @@ What was compiled, what was run, and what it did.
 | `simcity.bot` | the windowed game | compiles on `cranelift`; a real X11 window opens and the frame loop runs |
 | `tests.bot` | the city, 38 cases | compiles; **38 passed, 0 failed** |
 | `labels.bot` | the letters on the map, 6 cases | compiles; **6 passed, 0 failed** |
+| `crossings.bot` | the lines that may share a tile, 11 cases | compiles; **11 passed, 0 failed** |
 | `gametest.bot` | the window, no display | compiles; all four figures printed and correct |
 | `bench.bot` | the performance report | compiles; the figures below printed |
 
@@ -82,8 +83,8 @@ renderer draws nothing and no frame is uploaded:
     residents 1260
     funds 88,725
     months advanced 1400
-    1000 months took 20,848 ms
-    one month takes 20,848 microseconds      20.8 ms a month
+    1000 months took 21,711 ms
+    one month takes 21,711 microseconds      21.7 ms a month
 
 The town holds 27 developed tiles out of 2304 -- a deliberately small
 developed city, because the requirement is a *representative* developed city and
@@ -114,8 +115,8 @@ real but worth a fifth of that.
 
 ### What this means for play
 
-21 ms a month is 4% of the CPU at the game's normal speed (a month every half a
-second) and 21% at rush (a month every tenth of a second). Rendering is extra
+22 ms a month is 4% of the CPU at the game's normal speed (a month every half a
+second) and 22% at rush (a month every tenth of a second). Rendering is extra
 and separate: a whole viewport of 26 by 19 tiles is 331,776 bytes of texture,
 redrawn only when the city or the pointer's tile changes.
 
@@ -125,6 +126,12 @@ redrawn only when the city or the pointer's tile changes.
 |---|---|
 | the model compiles | yes |
 | the city's 38 tests pass | yes, run |
+| a power line crosses a road and a rail | yes, run: `crossings.bot`, 11 cases.
+  With the crossing rule weakened in either direction three cases fail, and
+  with a crossing tile made to stop carrying traffic or power the case that
+  covers it fails, so the suite has teeth in both directions |
+| a rail may not cross a road | yes, run: the same suite, and the refusal is
+  named in the status line rather than answered "the ground is not clear" |
 | the map's letters carry a letter, and are drawn | yes, run: `labels.bot`, 6
   cases, including one that renders one tile alone and counts its pixels of
   label ink. With the glyph guard weakened the same case fails, so it has

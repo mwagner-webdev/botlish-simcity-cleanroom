@@ -244,12 +244,15 @@ system cannot see, and the bug in section 7 was exactly a well-typed call.
 
 | measurement | value |
 |---|---|
-| lines of Botlish in `simcity/` and the five entry programs | about 3,700 |
+| lines of Botlish in `simcity/` and the six entry programs | about 3,900 |
 | modules | 11 |
 | first working headless simulation | the afternoon of day one |
-| the whole simulation, once the sweep direction was fixed | 21 ms a month on 48 by 48 |
-| test cases | 44 (38 for the city, 6 for the map's letters), all passing |
-| defects found by a test written after the fact | 2, both in the new label
-  drawing: the glyph guard leaked pixels outside the letter's box, and the rows
-  were read the wrong way up. Neither was visible in the headless figure, and
-  both were visible the moment a case counted the pixels |
+| the whole simulation, once the sweep direction was fixed | 22 ms a month on 48 by 48 |
+| test cases | 55 (38 for the city, 6 for the map's letters, 11 for crossings), all
+  passing |
+| defects found by a test written after the fact | 3, two in the new label
+  drawing and one in the new crossing drawing. The label defects were the glyph
+  guard leaking pixels outside the letter's box and the rows reading the wrong
+  way up; the crossing drawing's stripe was at first not gated on the wire
+  running that way at all. None was visible in a headless figure, and each was
+  visible the moment a case counted the pixels |

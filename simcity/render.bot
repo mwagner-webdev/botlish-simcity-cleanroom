@@ -94,6 +94,12 @@ LABEL = 5
 
 LABEL_AT = 1
 
+# Where a crossing's stripe begins, and how wide it is: the middle two rows or
+# columns of the tile, so the wire shows across the carriageway it crosses.
+CROSS_AT = 3
+
+CROSS_WIDE = 2
+
 #
 # A number per letter, so the glyph table is a list of lists rather than a
 # switch over strings.
@@ -313,6 +319,52 @@ nomethod fn terrain_ink(city: simcity::city::City, x: int, y: int) -> int:
     else:
         GRASS_INK
 
+# WHETHER a wire runs through this tile over a road or a rail, so the tile is a
+# crossing rather than a plain line: power under a carriageway.
+nomethod fn crossing?(city: simcity::city::City, x: int, y: int) -> bool:
+    simcity::city::wire_at(city, x, y) != 0 and (simcity::city::road_at(city, x, y) != 0 or simcity::city::rail_at(city, x, y) != 0)
+
+# The tile's own ink under a crossing's stripe: the carriageway's colour, so
+# the map still reads by hue and the wire is the stripe laid over it. A
+# crossing is only ever a wire over a road or a rail, so the branch that is
+# left is the rail.
+nomethod fn under_ink(city: simcity::city::City, x: int, y: int) -> int:
+    if simcity::city::road_at(city, x, y) != 0:
+        ROAD_INK
+    else:
+        RAIL_INK
+
+# The ink a wire crossing a road or a rail is drawn with: the wires' own ink,
+# and its live colour once power runs along it.
+nomethod fn wire_ink(city: simcity::city::City, x: int, y: int) -> int:
+    if simcity::city::powered_at(city, x, y) != 0:
+        WIRE_LIVE
+    else:
+        WIRE_INK
+
+# Which way the wire runs through the crossing, so the stripe follows it: the
+# four neighbours of a wire tile are where the line continues, and a neighbour
+# either side means the wire crosses here in that direction.
+nomethod fn wire_runs_across?(city: simcity::city::City, x: int, y: int) -> bool:
+    left = simcity::city::wire_at(city, x - 1, y) != 0
+    right = simcity::city::wire_at(city, x + 1, y) != 0
+    left and right
+
+nomethod fn wire_runs_down?(city: simcity::city::City, x: int, y: int) -> bool:
+    up = simcity::city::wire_at(city, x, y - 1) != 0
+    down = simcity::city::wire_at(city, x, y + 1) != 0
+    up and down
+
+# WHETHER this pixel of the tile is on the wire's stripe: two pixels either
+# side of the tile's middle, running across or down. A stripe of two shows a
+# line at this size without a cell's whole tile being wire.
+nomethod fn on_wire(row: int, col: int, across: bool) -> bool:
+    band = if across:
+        row >= CROSS_AT and row < CROSS_AT + CROSS_WIDE
+    else:
+        col >= CROSS_AT and col < CROSS_AT + CROSS_WIDE
+    band
+
 nomethod fn ground(city: simcity::city::City, x: int, y: int) -> int:
     kind = simcity::city::zone_at(city, x, y)
     if simcity::city::road_at(city, x, y) != 0:
@@ -370,6 +422,15 @@ nomethod fn core_ink(city: simcity::city::City, x: int, y: int) -> int:
 nomethod fn shade(city: simcity::city::City, x: int, y: int, row: int, col: int, at: int) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
     if at == simcity::city::pack(x, y):
         pixel(CURSOR_INK)
+    elif crossing?(city, x, y):
+        # The wire over the carriageway: the road or rail fills the tile and
+        # the wire is a stripe of its own ink along it, so a crossing reads as
+        # both at once rather than as whichever the drawing reached first.
+        stripe = on_wire(row, col, wire_runs_across?(city, x, y) or not wire_runs_down?(city, x, y))
+        if stripe:
+            pixel(wire_ink(city, x, y))
+        else:
+            pixel(under_ink(city, x, y))
     else:
         ink = ground(city, x, y)
         lit = if row > 0 and row <= core_rows(city, x, y):
