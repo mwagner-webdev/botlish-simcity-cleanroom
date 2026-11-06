@@ -11,6 +11,8 @@ What was compiled, what was run, and what it did.
 | `labels.bot` | the letters on the map, 6 cases | compiles; **6 passed, 0 failed** |
 | `crossings.bot` | the lines that may share a tile, 11 cases | compiles; **11 passed, 0 failed** |
 | `saves.bot` | a city written to a file and read back, 5 cases | compiles; **5 passed, 0 failed** |
+| `crossings.bot` grew to 13 cases | one line laid on a line of its own kind is refused, and a
+  crossing is charged once | compiles; **13 passed, 0 failed** |
 | `gametest.bot` | the window, no display | compiles; all four figures printed and correct |
 | `bench.bot` | the performance report | compiles; the figures below printed |
 
@@ -225,6 +227,16 @@ bytes of texture, redrawn only when the city or the pointer's tile changes.
   (Fixed in the commit before this one.) The palette now also declares its own
   natural height, and `gametest.bot` reads it back: 208 points wanted against
   386 held. Shrink the row the palette sits in and that figure answers 0.
+* **Holding the mouse button kept draining the treasury.** Found by a player,
+  not by a test. Raven reports the button's state once a frame and never reports
+  a press, so building placed on every frame the button was down; and my
+  crossing rule tested only the line that may not share a tile, not the line
+  already there, so a road laid on a road was allowed and charged again. Holding
+  the road tool still on the tile just built paid $10 a frame -- $600 a second.
+  Both halves are fixed: the game derives a press from the button and the tile
+  stored between frames, and `line_fits?` refuses a line laid on its own kind.
+  `gametest.bot` now reads the mouse three times with the button held and answers
+  1 -- with either fix removed it answers 0 and prints 10/10, the drain.
 * **The letters leaked off their tile.** The first version of the glyph
   read its pixel by naming a bit position and guarding only that position, so
   a pixel one row or one column outside the letter's box could still be read:

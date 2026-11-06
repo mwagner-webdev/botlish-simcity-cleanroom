@@ -718,11 +718,22 @@ nomethod fn accept(game: Game, event: raven::Event) -> Game:
 
 # The pointer and the button, read once a frame: a click builds, a drag runs
 # a line, and the tile under the pointer is drawn as the placement preview.
+#
+# A click is one placement, and holding the button is not a second one. Raven
+# reports the button's *state* once a frame and never reports a press, so the
+# press has to be derived: the button's state and the tile it was on are both
+# stored between frames, and a placement happens when the button has gone down
+# or when the pointer has moved onto a tile it was not on. Dragging along a
+# road therefore runs the line a tile at a time, and resting the button on the
+# tile just built builds nothing.
 nomethod fn read_mouse(game: Game) -> Game errors NonFiniteFloat:
     where = tile_under(game)
     button = simcity::screen::down?(game.window, raven::window::R_MOUSE_LEFT)
     s = state(game)
-    if button and simcity::city::inside?(s.city, where.x, where.y):
+    pressed = button and not s.held
+    moved = where.x != s.cursor_x or where.y != s.cursor_y
+    building = button and (pressed or moved) and simcity::city::inside?(s.city, where.x, where.y)
+    if building:
         if s.tool == Tool::Inspect:
             looked = with_message(game, simcity::words::show_tile(s.city, where.x, where.y))
             with_cursor(looked, where.x, where.y, button)

@@ -110,6 +110,29 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
     delivered = frames(4)
     built = simcity::app::state(clicked).city
     spent = 20000 - simcity::city::funds(built)
+    # Holding the button must not keep paying. Raven reports the button's state
+    # once a frame and never reports a press, so the game derives the press:
+    # the button and the tile are stored between frames, and a placement happens
+    # when the button has gone down or the pointer has moved onto a new tile.
+    # Aim at a bare tile, press, and read the mouse three times without moving:
+    # the first costs a road, the next two cost nothing.
+    game.window.id.Rwindow_inject_mouse_move(where.x + std::float64::from_int(2 * simcity::app::TILE_PX + 8), where.y + std::float64::from_int(2 * simcity::app::TILE_PX + 8))
+    holding = frames(4)
+    once = simcity::app::read_mouse(clicked)
+    after_one = simcity::city::funds(simcity::app::state(once).city)
+    twice = simcity::app::read_mouse(once)
+    after_two = simcity::city::funds(simcity::app::state(twice).city)
+    thrice = simcity::app::read_mouse(twice)
+    after_three = simcity::city::funds(simcity::app::state(thrice).city)
+    held_cost = after_one - after_two
+    still_cost = after_two - after_three
+    # One placement happened -- the tile the pointer moved onto has a road on
+    # it -- and the two further reads with the button still down cost nothing.
+    held_roads = simcity::city::road_at(simcity::app::state(thrice).city, 2, 2)
+    held_once = if held_roads == 1 and held_cost == 0 and still_cost == 0:
+        1
+    else:
+        0
     roads = road_count(built)
     # Now inspect the town's own residential block.
     looked = simcity::app::with_tool(clicked, simcity::city::Tool::Inspect)
@@ -185,7 +208,7 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
         1
     else:
         0
-    once = if still_x == after_x and let_go == after_x:
+    stepped_once = if still_x == after_x and let_go == after_x:
         1
     else:
         0
@@ -231,7 +254,7 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
     else:
         0
     raven::stop()
-    ["the map is ".concat(std::int::to_string(wide)).append_char(',').append_char(' ').concat(std::int::to_string(tall)), "corners reachable ".concat(std::int::to_string(corners)), "spent ", std::int::to_string(spent), "roads in the viewport ".concat(std::int::to_string(roads)), "the inspector says: ".concat(note), "the map is an image widget ".concat(std::int::to_string(drawn)), "the palette fits the window ".concat(std::int::to_string(fits)), "the palette has room ".concat(std::int::to_string(room_enough)).append_char(' ').concat(std::int::to_string(wanted)).append_char('/').concat(std::int::to_string(room)), "the save said: ".concat(said), "after loading, the road is back: ".concat(told_load), "the load gave back the same money ".concat(std::int::to_string(same_money)), "the same roads ".concat(std::int::to_string(same_roads)), "the same month ".concat(std::int::to_string(same_month)), "the arrow key moved the view ".concat(std::int::to_string(moved)), "by one step at a time ".concat(std::int::to_string(sideways)), "and moved it once ".concat(std::int::to_string(once)).append_char(' ').concat(std::int::to_string(before_x)).concat(dash()).concat(std::int::to_string(after_x)).concat(dash()).concat(std::int::to_string(still_x)).append_char(' ').concat(std::int::to_string(before_y)).concat(dash()).concat(std::int::to_string(after_y)), "a click scrolled the view to ".concat(std::int::to_string(simcity::app::state(loaded).origin_x)).append_char(',').append_char(' ').concat(std::int::to_string(simcity::app::state(loaded).origin_y))]
+    ["the map is ".concat(std::int::to_string(wide)).append_char(',').append_char(' ').concat(std::int::to_string(tall)), "corners reachable ".concat(std::int::to_string(corners)), "spent ", std::int::to_string(spent), "holding the button cost ".concat(std::int::to_string(held_once)).append_char(' ').concat(std::int::to_string(held_cost)).append_char('/').concat(std::int::to_string(still_cost)).append_char(' ').concat(std::int::to_string(held_roads)), "roads in the viewport ".concat(std::int::to_string(roads)), "the inspector says: ".concat(note), "the map is an image widget ".concat(std::int::to_string(drawn)), "the palette fits the window ".concat(std::int::to_string(fits)), "the palette has room ".concat(std::int::to_string(room_enough)).append_char(' ').concat(std::int::to_string(wanted)).append_char('/').concat(std::int::to_string(room)), "the save said: ".concat(said), "after loading, the road is back: ".concat(told_load), "the load gave back the same money ".concat(std::int::to_string(same_money)), "the same roads ".concat(std::int::to_string(same_roads)), "the same month ".concat(std::int::to_string(same_month)), "the arrow key moved the view ".concat(std::int::to_string(moved)), "by one step at a time ".concat(std::int::to_string(sideways)), "and moved it once ".concat(std::int::to_string(stepped_once)).append_char(' ').concat(std::int::to_string(before_x)).concat(dash()).concat(std::int::to_string(after_x)).concat(dash()).concat(std::int::to_string(still_x)).append_char(' ').concat(std::int::to_string(before_y)).concat(dash()).concat(std::int::to_string(after_y)), "a click scrolled the view to ".concat(std::int::to_string(simcity::app::state(loaded).origin_x)).append_char(',').append_char(' ').concat(std::int::to_string(simcity::app::state(loaded).origin_y))]
 
 result = main():
     on raven::RavenFailed failure:

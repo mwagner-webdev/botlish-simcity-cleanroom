@@ -158,6 +158,18 @@ fn a_rail_may_not_cross_a_road() -> Crossing:
 fn a_road_may_not_cross_a_rail() -> Crossing:
     refused(simcity::city::Tool::Rail, simcity::city::Tool::Road)
 
+# A line laid on a line of its own kind joins it, and joining must not pay. A
+# road laid on a road that charged for itself again is a treasury that drains
+# while the player holds the button still, which is what happens if only the
+# line that may not share the tile is tested for.
+fn a_road_laid_on_a_road_is_refused() -> Crossing:
+    crossed(simcity::city::Tool::Road, simcity::city::Tool::Road)
+
+# The crossing that is charged once, and once only: a wire, then a road across
+# it, is five and then ten -- not ten a frame while the button is held.
+fn a_road_crossing_a_wire_is_charged_once() -> Crossing:
+    crossed(simcity::city::Tool::Wire, simcity::city::Tool::Road)
+
 # A wire laid along a wire joins it rather than making a second line, so the
 # tile is one wire and the cost is one wire's.
 nomethod fn joined() -> Crossing:
@@ -237,6 +249,16 @@ nomethod fn gone(numbers: Crossing) -> bool:
 nomethod fn stripe_drawn(numbers: Crossing) -> bool:
     numbers.spent == simcity::render::TILE * simcity::render::CROSS_WIDE
 
+# A line laid on one of its own kind: one line's price, not two, and the
+# placement refused rather than charged.
+nomethod fn joins_once(numbers: Crossing) -> bool:
+    numbers.spent == 10 and numbers.refused == 3 and numbers.road == 1
+
+# A crossing charged for what it crossed: the wire's price and the road's, and
+# no more however many frames the button is held.
+nomethod fn charged_once(numbers: Crossing) -> bool:
+    numbers.spent == 15 and numbers.wire == 1 and numbers.road == 1
+
 nomethod fn register_tests():
     std::test::holds("a wire crosses a road", "the tile holds both, and both were paid for", both_lines, a_wire_crosses_a_road)
     std::test::holds("a road lies over a wire", "the tile holds both, and both were paid for", both_lines, a_road_lies_over_a_wire)
@@ -245,6 +267,8 @@ nomethod fn register_tests():
     std::test::holds("a road may not cross a rail", "the rail is left as it was", keeps_its_own, a_road_may_not_cross_a_rail)
     std::test::holds("the refusal costs nothing", "the treasury is untouched", nothing_charged, a_rail_may_not_cross_a_road)
     std::test::holds("a wire joins a wire", "one tile of wire, and one wire's price", still_joined, a_wire_joins_a_wire)
+    std::test::holds("a road laid on a road is refused", "one road's price, and no second charge", joins_once, a_road_laid_on_a_road_is_refused)
+    std::test::holds("a road crossing a wire is charged once", "the wire's price and the road's, and no more", charged_once, a_road_crossing_a_wire_is_charged_once)
     std::test::holds("power runs through a crossing", "the tile across the road is live", lit, power_runs_through_a_crossing)
     std::test::holds("traffic still passes a crossing", "the block beside the road is served", served, traffic_still_passes_a_crossing)
     std::test::holds("bulldozing takes the whole crossing", "both lines go, at one tile's price", gone, bulldozing_takes_the_whole_crossing)

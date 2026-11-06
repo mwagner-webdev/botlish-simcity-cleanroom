@@ -181,6 +181,14 @@ and `-help std::mutable_array::copy` answered the two questions I asked most.
   touches a file requires the store's context and `std::test::holds` takes
   functions as arguments. `saves.bot` is therefore a program that prints its own
   report rather than a suite, which is the same shape with a different runner.
+* **The input model reports state and never reports a press.** Raven's event
+  bridge carries twelve kinds and a key press is not one of them; a texture, which
+  is what a game's map is, reports nothing at all. So a game polls
+  `Rwindow_is_mouse_button_down` and `Rwindow_is_key_down` once a frame -- which
+  is workable, but means the game must derive "the player pressed" itself. Mine
+  did not, and held the button down on the tile it had just built paid for it
+  again every frame: $600 a second, found by a player and not by me. The report
+  at `TOOLCHAIN-REPORT.md` is about this and everything else.
 * **`compilerpedia` does not know a project's own symbols.** `-help simcity::sim::tick`
   answers "no Compilerpedia topic matches". For a program of eleven modules that
   leaves cross-references as plain comments.
@@ -272,8 +280,11 @@ system cannot see, and the bug in section 7 was exactly a well-typed call.
 | modules | 11 |
 | first working headless simulation | the afternoon of day one |
 | the whole simulation, once the sweep direction was fixed | 22 ms a month on 48 by 48 |
-| test cases | 60 (38 for the city, 6 for the map's letters, 11 for crossings, 5
+| test cases | 63 (38 for the city, 6 for the map's letters, 13 for crossings, 5
   for saving), all passing |
+| defects found by playtesting | 1 -- holding the mouse button drained the
+  treasury at $10 a frame, because Raven reports the button's state and never
+  reports a press. Every other defect was found by a test written afterwards |
 | defects found by a test written after the fact | 5: two in the label drawing,
   one in the crossing drawing, and two in the save format -- the bank's fields
   were nine digits short of a 32-bit generator state, and the bank was never

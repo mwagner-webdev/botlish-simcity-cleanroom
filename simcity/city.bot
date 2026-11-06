@@ -414,9 +414,13 @@ nomethod fn block_inside?(city: City, x: int, y: int) -> bool:
 # of its own rather than "the tile is empty".
 #
 # WHETHER the line TOOL may be laid on the tile it already holds something of.
+# A line laid on a line of its own kind joins it, and joining must not pay:
+# laying a road on a road and charging for it again is a treasury that drains
+# while the player holds the button still, which is exactly what happens if
+# only the *other* line is tested for.
 nomethod fn line_fits?(city: City, tool: Tool, x: int, y: int) -> bool:
     if tool == Tool::Road:
-        rail_at(city, x, y) == 0
+        road_at(city, x, y) == 0 and rail_at(city, x, y) == 0
     elif tool == Tool::Rail:
         road_at(city, x, y) == 0 and rail_at(city, x, y) == 0
     else:

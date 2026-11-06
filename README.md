@@ -126,4 +126,7 @@ much of it is developed, and how long a thousand months took.
 
 `GAME-DESIGN.md` has the simulation rules and what was left out or simplified.
 `RESULTS.md` has the measured numbers. `BOTLISH-EXPERIENCE.md` has what the
-language was like to write this in.
+language was like to write this in. `TOOLCHAIN-REPORT.md` is a report on the
+deficiencies of Botlish and Raven, written for whoever maintains them: each one
+is a thing that actually happened to this project, with what it cost and what
+would fix it.
