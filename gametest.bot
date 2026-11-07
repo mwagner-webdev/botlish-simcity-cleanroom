@@ -220,11 +220,6 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
     else:
         0
     # The palette must fit inside the window. A control laid out below the
-    # window's bottom edge is never drawn and can never be clicked, so the
-    # window is measured and the palette's own bottom edge is compared with it:
-    # a palette that wants more room than the map's row has overflows the
-    # window, and its lower controls are unreachable.
-    # The palette must fit inside the window. A control laid out below the
     # window's bottom edge is never drawn and can never be clicked, so two
     # things are measured: where the palette's own bottom edge lands, and
     # whether its controls want more room than the row beside the map has.

@@ -36,12 +36,6 @@ import simcity::city
 
 # Why a file was not a city.
 error BadSave
-
-# The magic every save begins with.
-
-# The magic every save begins with.
-
-# The magic every save begins with.
 # The magic every save begins with.
 MAGIC = "SIMCITY1\n"
 
@@ -61,18 +55,6 @@ WIDE_DIGITS = 4
 # How many bank slots a city has.
 nomethod fn slots() -> int:
     simcity::city::BANK_SIZE
-
-# --- Fixed-width decimal ---------------------------------------------------
-#
-# A value is written as its digits with zeroes in front, and read back as ten
-# times what it has plus a digit. Both need no delimiter, so neither needs a
-# splitter or a parser.
-
-# --- Fixed-width decimal ---------------------------------------------------
-#
-# A value is written as its digits with zeroes in front, and read back as ten
-# times what it has plus a digit. Both need no delimiter, so neither needs a
-# splitter or a parser.
 # --- Fixed-width decimal ---------------------------------------------------
 #
 # A value is written as its digits with zeroes in front, and read back as ten
@@ -170,9 +152,6 @@ nomethod fn put_bank(text: str, city: simcity::city::City, slot: int) -> str:
     else:
         put_bank(put_slot(text, city, slot), city, slot + 1)
 
-# --- The tile attributes ---------------------------------------------------
-
-# --- The tile attributes ---------------------------------------------------
 # --- Reading a save back ---------------------------------------------------
 # WHETHER TEXT begins with the magic, tag and all.
 # The one place a save is refused: every check that fails says the same thing,
@@ -235,9 +214,6 @@ nomethod fn held(v: int, width: int) -> int:
     else:
         v
 
-# --- The bank --------------------------------------------------------------
-
-# --- The bank --------------------------------------------------------------
 # --- The tile attributes ---------------------------------------------------
 # One tile's value in one attribute, as a fixed-width field.
 nomethod fn put_value(text: str, v: int, width: int) -> str:
@@ -277,9 +253,6 @@ nomethod fn describe(city: simcity::city::City) -> str:
     fifteen = put_field(fourteen.concat("acc\n"), city.grid.access, 0, total, 1)
     money.concat(fifteen)
 
-# --- Reading a save back ---------------------------------------------------
-
-# --- Reading a save back ---------------------------------------------------
 # WHETHER the tag at AT of TEXT is TAG.
 nomethod fn has_tag(text: str, tag: str, at: int) -> bool:
     has_tag_at(text, tag, at, 0)

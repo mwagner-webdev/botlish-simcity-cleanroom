@@ -17,10 +17,6 @@ import std::mutable_array
 import simcity::rng
 
 # --- Terrain ---------------------------------------------------------------
-
-# --- Terrain ---------------------------------------------------------------
-
-# --- Terrain ---------------------------------------------------------------
 WATER = 0
 
 GRASS = 1
@@ -28,9 +24,6 @@ GRASS = 1
 TREES = 2
 
 ROUGH = 3
-
-# --- What a tile holds -----------------------------------------------------
-
 # --- What a tile holds -----------------------------------------------------
 # Nothing here.
 NONE = 0
@@ -66,9 +59,6 @@ MONTHS = 12
 TAX_DEFAULT = 7
 
 TAX_MAX = 20
-
-# --- Tools ----------------------------------------------------------------
-
 # --- Tools ----------------------------------------------------------------
 # What the player can build, for the tool palette.
 enum Tool:
@@ -138,9 +128,6 @@ nomethod fn cost_of(tool: Tool) -> int:
         10
     else:
         0
-
-# --- The grid --------------------------------------------------------------
-
 # --- The grid --------------------------------------------------------------
 # Every tile attribute, one array each. A tile's index is y * width + x.
 struct Grid:
@@ -206,18 +193,6 @@ nomethod fn pack_x(i: int) -> int:
 
 nomethod fn pack_y(i: int) -> int:
     i.shift_right(8)
-
-# --- Terrain ---------------------------------------------------------------
-#
-# The land is a deterministic value noise of the seed: a lattice over 32-tile
-# cells, blended three times for water, trees and rough ground. Nothing about
-# it is random at play time, so the same seed is the same map every run.
-
-# --- Terrain ---------------------------------------------------------------
-#
-# The land is a deterministic value noise of the seed: a lattice over 32-tile
-# cells, blended three times for water, trees and rough ground. Nothing about
-# it is random at play time, so the same seed is the same map every run.
 # --- Terrain ---------------------------------------------------------------
 #
 # The land is a deterministic value noise of the seed: a lattice over 32-tile
@@ -321,9 +296,6 @@ nomethod fn make(width: int, height: int, seed: int, start: int) -> City:
     grid = city.grid
     fill_land(width, height, seed, grid)
     City {width: width, height: height, grid: grid, bank: city.bank}
-
-# --- Reading a tile --------------------------------------------------------
-
 # --- Reading a tile --------------------------------------------------------
 # WHETHER (X, Y) is a tile of the map.
 nomethod fn inside?(city: City, x: int, y: int) -> bool:
@@ -425,9 +397,6 @@ nomethod fn line_fits?(city: City, tool: Tool, x: int, y: int) -> bool:
         road_at(city, x, y) == 0 and rail_at(city, x, y) == 0
     else:
         wire_at(city, x, y) == 0
-
-# --- The bank --------------------------------------------------------------
-
 # --- The bank --------------------------------------------------------------
 # A bank slot, or 0 outside it: the guard is the bounds proof.
 nomethod fn bank_at(city: City, slot: int) -> int:
@@ -480,20 +449,6 @@ nomethod fn want(city: City, slot: int) -> int:
         demand_c(city)
     else:
         demand_i(city)
-
-# --- A new city from an old one --------------------------------------------
-#
-# `with_bank` and `with_two` build the city a month returns: a fresh bank,
-# the old one copied into it, and the new scalars written in. The copy is
-# written through a place, because an array reached through an ordinary
-# parameter is that function's own copy and a write into it would be lost.
-
-# --- A new city from an old one --------------------------------------------
-#
-# `with_bank` and `with_two` build the city a month returns: a fresh bank,
-# the old one copied into it, and the new scalars written in. The copy is
-# written through a place, because an array reached through an ordinary
-# parameter is that function's own copy and a write into it would be lost.
 # --- A new city from an old one --------------------------------------------
 #
 # `with_bank` and `with_two` build the city a month returns: a fresh bank,

@@ -31,9 +31,10 @@ from another language.
     gametest.bot          the windowed game, exercised with no display
     sight.bot             the map is drawn, checked on the real renderer
     bench.bot             the deterministic performance report
-    tools/                order.py, dedupe.py: helpers used while writing the sources
-                          (a module's top level is ordered callee-first, and the
-                          duplicates they remove are development debris)
+    tools/                order.py, dedupe.py, undupe.py: helpers used while
+                          writing the sources (a module's top level is ordered
+                          callee-first, and the duplicated comments an earlier
+                          reordering pass left behind are removed by undupe.py)
 
 ## Building and running
 

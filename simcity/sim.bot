@@ -40,8 +40,6 @@ import type simcity::city::Tool
 import simcity::city
 
 # --- Balance ---------------------------------------------------------------
-
-# --- Balance ---------------------------------------------------------------
 COAL_POWER = 900
 
 NUCLEAR_POWER = 1800

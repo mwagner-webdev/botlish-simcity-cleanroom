@@ -148,6 +148,15 @@ answer a string, or print a caller-supplied rendering of the actual figure.
 nothing writes one. There is no `std::file`, no `std::path`, no `std::env`, no
 `std::process`.
 
+A related gap, on the tooling side rather than the library's: nothing notices a
+comment that has been duplicated. My own reordering helper ran over a module
+more than once and each pass repeated the comment it was moving, so
+`simcity/scenario.bot` carried 63 copies of one two-line comment and
+`simcity/render.bot` 32 copies of one line, with the blank lines between them.
+The compiler is happy with that, the tests are happy with that, and the program
+it compiles to is identical. Cleaning it up meant a script and a file-by-file
+proof that the only lines removed were duplicated comments.
+
 Save/load was possible only because Raven happens to export `Rfile_read` and
 `Rfile_write` alongside its GUI, which is not where a language would put file
 I/O. A console program in Botlish cannot persist anything at all.

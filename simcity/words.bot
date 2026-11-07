@@ -1,11 +1,7 @@
 # simcity::words -- the figures of a city, as the labels on the screen read.
-
 #
-
 # Botlish has no formatting and no interpolation, so every figure is built as
-
 # text here and nowhere else: a label is given one string, and the string is
-
 # made by this module from the city the simulation owns.
 
 import std::int

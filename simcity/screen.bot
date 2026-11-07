@@ -1,35 +1,19 @@
 # simcity::screen -- the game's one layer of raw native memory.
-
 #
-
 # Two things in this game cannot be done through a wrapped call, and both
-
 # need memory of our own that C writes into:
-
 #
-
 #   * Raven draws what a texture holds, and a texture is made from RGBA bytes
-
 #     in native memory. The screen holds one buffer of `4 * width * height`
-
 #     bytes, uploads it and keeps it alive while the screen lives.
-
 #   * Raven reports control input through the package's event bridge, but the
-
 #     bridge watches named widget kinds only: nothing watches the map the game
-
 #     draws into a texture. So the game polls the window, through the generated
-
 #     binding of Raven's own polling functions, and those write C floats into
-
 #     out-parameters of our own.
-
 #
-
 # Because that is where raw authority lives, the module needs a context of its
-
 # own: `Screen` owns the native memory, is installed once by the entry program,
-
 # and nothing above this module is direct for holding it.
 
 import std::abi
@@ -62,11 +46,8 @@ extern c library "raven_bridge" static
 private extern c fn calloc(count: std::ffi::c::ULong, size: std::ffi::c::ULong) -> std::ffi::c::Ptr[std::ffi::c::Void] independent
 
 private extern c fn free(memory: std::ffi::c::Ptr[std::ffi::c::Void]) -> unit
-
 # memcpy(out, data, count) through the package's bridge: DATA is lent read-only
-
 # by Botlish, OUT is this module's own native memory, so a frame reaches Raven
-
 # by exactly one copy.
 
 private extern c fn botlish_raven_bytes_copy(data: std::ffi::c::Ptr[std::ffi::c::UChar] read noescape, out: std::ffi::c::Ptr[std::ffi::c::UChar] write noescape, count: std::ffi::c::ULong) -> std::ffi::c::ULong

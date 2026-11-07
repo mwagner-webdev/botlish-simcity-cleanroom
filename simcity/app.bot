@@ -638,8 +638,7 @@ nomethod fn act(game: Game, name: str) -> Game:
 # uses, once a frame, from `simcity::screen::key_down`.
 #
 # Four keys, one bit each, so the previous frame's mask is one integer and a
-# press is a bit that is set now and was not set before: a key held down moves
-# the view one step and then waits to be released, which is what a key does.
+# press is a bit that is set now and was not set before.
 KEY_LEFT = 1
 
 KEY_RIGHT = 2

@@ -26,10 +26,6 @@ import simcity::store
 
 with context raven::create()
 with context simcity::store::create()
-
-# The file every case writes to and reads from: one file, rewritten, so a run
-# leaves nothing behind that a later run could mistake for a city.
-
 # The file every case writes to and reads from: one file, rewritten, so a run
 # leaves nothing behind that a later run could mistake for a city.
 FILE = "saves.tmp"

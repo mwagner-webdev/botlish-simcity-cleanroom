@@ -1,41 +1,22 @@
 # simcity::render -- the city as pixels.
-
 #
-
 # The map is drawn into one RGBA byte list which the game's screen uploads as
-
 # a texture: TILE texture pixels to a side for every map tile, so a whole
-
 # viewport is one list of bytes and redrawing one tile is redrawing one tile.
-
 # Eight texture pixels per tile is enough room for the single letter that says
-
 # what the object is, which is the whole point of the size: a 3 by 3 zoning
-
 # block has no room for a word, but it has room for R, C, I, P, N, O, F or K.
-
 #
-
 # The letters are a five by five bitmap font drawn here as pixel patterns:
-
 # the game has no font to draw with inside a texture, and a letter made of
-
 # pixels is the same weight of work as a letter drawn by a library.
-
 #
-
 # A frame is built with collecting loops, because Botlish has no list
-
 # concatenation: each loop collects its own rows, and the loops are nested so
-
 # that the outermost one collects whole texture-pixel rows of the viewport.
-
 #
-
 # A colour is a packed integer, red in the high byte and blue in the low,
-
 # because a module-level binding may not construct a struct -- a constant in
-
 # Botlish is a number or a string, never a value of its own making.
 
 import std::byte
@@ -48,44 +29,6 @@ import type simcity::city::Tool
 
 import simcity::city
 
-
-
-# Texture pixels per map tile.
-
-# Texture pixels per map tile.
-
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
-# Texture pixels per map tile.
 # Texture pixels per map tile.
 TILE = 8
 
@@ -411,12 +354,6 @@ nomethod fn core_ink(city: simcity::city::City, x: int, y: int) -> int:
         140 * 65536 + 218 * 256 + 140
     else:
         ground(city, x, y)
-
-# --- The frame -------------------------------------------------------------
-
-# --- The frame -------------------------------------------------------------
-# --- The frame -------------------------------------------------------------
-# --- The frame -------------------------------------------------------------
 # --- The frame -------------------------------------------------------------
 # One texture pixel of the tile (X, Y) at pixel (COL, ROW) of that tile.
 nomethod fn shade(city: simcity::city::City, x: int, y: int, row: int, col: int, at: int) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:

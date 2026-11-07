@@ -1,15 +1,9 @@
 # simcity::actions -- what the player does to the city: place, clear, spend.
-
 #
-
 # A placement is a value in, a value out: the tool, the tile, and the city the
-
 # click was on give either a new city or the reason the city did not change.
-
 # Nothing here knows about Raven, about the cursor, or about how often the
-
 # simulation ticks; it is the one place where the player's intent becomes map
-
 # state and the treasury moves.
 
 import std::mutable_array
@@ -18,16 +12,6 @@ import type simcity::city::Tool
 
 import simcity::city
 
-# What a placement achieved.
-
-# What a placement achieved.
-
-# What a placement achieved.
-# What a placement achieved.
-
-# What a placement achieved.
-# What a placement achieved.
-# What a placement achieved.
 # What a placement achieved.
 enum Placed:
     Built,
@@ -91,9 +75,6 @@ nomethod fn set_pop(city: simcity::city::City, x: int, y: int, v: int, place gri
 
 nomethod fn set_access(city: simcity::city::City, x: int, y: int, v: int, place grid: simcity::city::Grid) -> unit:
     put(grid.access, simcity::city::index_of(city, x, y), v)
-
-# --- Validation ------------------------------------------------------------
-
 # --- Validation ------------------------------------------------------------
 # WHETHER the tile is buildable ground: land that holds nothing yet.
 nomethod fn clear?(city: simcity::city::City, x: int, y: int) -> bool:

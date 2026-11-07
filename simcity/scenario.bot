@@ -1,25 +1,14 @@
 # simcity::scenario -- the six cities the tests build, and what they show.
-
 #
-
 # Every scenario here is a scripted sequence of the same construction actions
-
 # the windowed game performs, advanced by the same `simcity::sim::tick` the
-
 # windowed game calls, and read back through the same accessors. None of them
-
 # draws anything, and none of them knows a window exists, which is the point:
-
 # what the tests assert is what the game does.
-
 #
-
 # The layout each one builds is the same small town -- a road along the edge,
-
 # a power line, a coal plant, and a row of residential, commercial and
-
 # industrial blocks -- because a scenario is only meaningful if the one thing
-
 # it changes is the thing under test.
 
 import std::int
@@ -30,109 +19,7 @@ import simcity::city
 
 import simcity::sim
 
-# What a scenario measured.
-
 # --- Building the town -----------------------------------------------------
-
-# What a scenario measured.
-
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
-# What a scenario measured.
-# --- Building the town -----------------------------------------------------
-# What a scenario measured.
 nomethod fn puts(city: simcity::city::City, tool: simcity::city::Tool, x: int, y: int) -> simcity::city::City:
     simcity::actions::place(city, tool, x, y)
 
