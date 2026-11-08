@@ -1,0 +1,125 @@
+# guiplay.bot -- the game played on a real display, with Raven's synthetic
+# input standing in for a mouse and a keyboard.
+#
+# A scratch harness: it starts the desktop backend (Vulkan, a real window on
+# DISPLAY), builds the game, and plays it the way the player does -- pick a
+# tool, drag a road, scroll the view with an arrow key -- reading the city and
+# the window's pixels back after each step. It is the "actual GUI launch and
+# interaction" check: every number below is read out of the running window, not
+# out of a headless Raven.
+import raven
+import raven::window
+import std::float64
+import std::int
+import std::str
+import simcity::app
+import simcity::city
+import simcity::screen
+import simcity::store
+
+with context raven::create()
+with context simcity::screen::create()
+with context simcity::store::create()
+
+nomethod fn frame() -> bool:
+    raven::draw_frame()
+
+nomethod fn frames(times: int) -> int:
+    fold i from 0 to times with intermediate drawn 0:
+        more = raven::draw_frame()
+        if more:
+            drawn + 1
+        else:
+            drawn
+
+nomethod fn changed(before: raven::Image, after: raven::Image) -> bool:
+    before.width != after.width or before.height != after.height or before.pixels != after.pixels
+
+nomethod fn number_text(value: Float64) -> str:
+    std::int::to_string(std::float64::truncate(value))
+
+nomethod fn road_count(city: simcity::city::City) -> int:
+    fold row from 0 to city.height with intermediate made 0:
+        fold col from 0 to city.width with intermediate u made:
+            u + simcity::city::road_at(city, col, row)
+
+# The first tile of the viewport that takes a road.
+nomethod fn buildable?(city: simcity::city::City, col: int, row: int) -> bool:
+    if simcity::city::terrain(city, col, row) == simcity::city::WATER:
+        false
+    elif simcity::city::road_at(city, col, row) != 0 or simcity::city::rail_at(city, col, row) != 0:
+        false
+    elif simcity::city::wire_at(city, col, row) != 0:
+        false
+    else:
+        simcity::city::zone_at(city, col, row) == simcity::city::NONE
+
+nomethod fn buildable_spot(city: simcity::city::City, origin_x: int, origin_y: int, row: int, col: int) -> simcity::app::Place:
+    if row >= simcity::app::DOWN:
+        simcity::app::place_of(-1, -1)
+    elif col >= simcity::app::ACROSS:
+        buildable_spot(city, origin_x, origin_y, row + 1, 0)
+    elif buildable?(city, origin_x + col, origin_y + row):
+        simcity::app::place_of(col, row)
+    else:
+        buildable_spot(city, origin_x, origin_y, row, col + 1)
+
+fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
+    raven::start(raven::desktop())
+    town = simcity::city::make(simcity::app::MAP_WIDE, simcity::app::MAP_TALL, 4242, 20000)
+    game = simcity::app::build(town)
+    laid = frames(6)
+    shown = simcity::app::show(game)
+    more = frames(6)
+    here = raven::rect(game.map)
+    empty = raven::capture(game.window)
+    # Pick the road tool, as a player does, and drag a road along the map.
+    roaded = simcity::app::with_tool(shown, simcity::city::Tool::Road)
+    picked = simcity::app::show(roaded)
+    at = buildable_spot(town, 0, 0, 0, 0)
+    aim = picked.window.inject_move(here.x + std::float64::from_int(at.x * simcity::app::TILE_PX + 8), here.y + std::float64::from_int(at.y * simcity::app::TILE_PX + 8)):
+        on NonFiniteFloat:
+            unit
+    moved = frames(4)
+    down = picked.window.inject_button(raven::window::R_MOUSE_LEFT, true)
+    pressed = frames(4)
+    clicked = simcity::app::take_events(picked)
+    drag = clicked.window.inject_move(here.x + std::float64::from_int((at.x + 11) * simcity::app::TILE_PX + 8), here.y + std::float64::from_int(at.y * simcity::app::TILE_PX + 8)):
+        on NonFiniteFloat:
+            unit
+    dragged = frames(4)
+    lined = simcity::app::take_events(clicked)
+    up = lined.window.inject_button(raven::window::R_MOUSE_LEFT, false)
+    released = frames(4)
+    drawn = simcity::app::show(lined)
+    fifth = frames(4)
+    sixth = frames(4)
+    road_frame = raven::capture(game.window)
+    road_drawn = if changed(empty, road_frame):
+        1
+    else:
+        0
+    roads = road_count(simcity::app::state(lined).city)
+    funds = simcity::city::funds(simcity::app::state(lined).city)
+    # Scroll the view with an arrow key, as a player does.
+    key = game.window.inject_key(raven::window::R_KEY_RIGHT, 0)
+    keyed = frames(4)
+    scrolled = simcity::app::take_events(lined)
+    shown2 = simcity::app::show(scrolled)
+    seventh = frames(4)
+    eighth = frames(4)
+    scrolled_frame = raven::capture(game.window)
+    scroll_drawn = if changed(road_frame, scrolled_frame):
+        1
+    else:
+        0
+    view = simcity::app::state(scrolled)
+    raven::stop()
+    ["the window drew a road ".concat(std::int::to_string(road_drawn)), "roads on the map ".concat(std::int::to_string(roads)), "funds left ".concat(std::int::to_string(funds)), "the window scrolled ".concat(std::int::to_string(scroll_drawn)).append_char(' ').concat(std::int::to_string(view.origin_x)).append_char(',').append_char(' ').concat(std::int::to_string(view.origin_y)), "the map is at ".concat(number_text(here.x)).append_char(',').append_char(' ').concat(number_text(here.y)).append_char(' ').concat(number_text(here.width)).append_char('x').concat(number_text(here.height))]
+
+result = main():
+    on raven::RavenFailed failure:
+        ["Raven did not start", failure.detail]
+    on NonFiniteFloat:
+        ["not a number"]
+result

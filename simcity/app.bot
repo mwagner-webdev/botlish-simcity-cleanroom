@@ -16,11 +16,21 @@
 # because Botlish structs have no field assignment: a change is a new struct
 # and a write into the array. That is the price of immutable records here, paid
 # once in `put` and the `State` literals rather than spread over the program.
+#
+# Input is Raven 0.4.0's: the window is watched (`watch_input`), so a key
+# press, a mouse press, every pointer move and the wheel are events of
+# `raven::events()`, and the question "is it held now?" is a query
+# (`mouse_button_down?`, `mouse_position`). Raven 0.3.2 exposed widget events
+# only, so the map was read by polling the window through generated C bindings
+# and two native float cells of this game's own; that is gone. The two
+# facilities answer two different questions and the map uses each for the one
+# it answers: a press is an event, so a construction happens once however long
+# the button is held, and a drag is the move events with the button held, so a
+# line runs along the tiles the pointer actually crossed.
 import std::abi::bytes
 import std::ffi::c
 import std::float64
 import std::int
-import std::list
 import std::mutable_array
 import std::str
 import type simcity::city::Tool
@@ -85,9 +95,9 @@ struct State:
     origin_y: int
     cursor_x: int
     cursor_y: int
-    held: bool
+    drag_x: int
+    drag_y: int
     ticks: int
-    keys: int
     message: str
     redraw: bool
 
@@ -170,16 +180,16 @@ nomethod fn no_state() -> State:
         origin_y: 0,
         cursor_x: -1,
         cursor_y: -1,
-        held: false,
+        drag_x: -1,
+        drag_y: -1,
         ticks: 0,
-        keys: 0,
         message: "nothing here",
         redraw: false
     }
 
 nomethod fn state(game: Game) -> State:
     if 0 < game.state.capacity():
-        std::mutable_array::at(game.state, 0)
+        game.state.at(0)
     else:
         no_state()
 
@@ -200,9 +210,9 @@ nomethod fn with_city(game: Game, city: simcity::city::City) -> Game:
         origin_y: s.origin_y,
         cursor_x: s.cursor_x,
         cursor_y: s.cursor_y,
-        held: s.held,
+        drag_x: s.drag_x,
+        drag_y: s.drag_y,
         ticks: s.ticks,
-        keys: s.keys,
         message: s.message,
         redraw: true
     })
@@ -218,9 +228,9 @@ nomethod fn with_message(game: Game, text: str) -> Game:
         origin_y: s.origin_y,
         cursor_x: s.cursor_x,
         cursor_y: s.cursor_y,
-        held: s.held,
+        drag_x: s.drag_x,
+        drag_y: s.drag_y,
         ticks: s.ticks,
-        keys: s.keys,
         message: text,
         redraw: true
     })
@@ -236,9 +246,9 @@ nomethod fn with_tool(game: Game, tool: Tool) -> Game:
         origin_y: s.origin_y,
         cursor_x: s.cursor_x,
         cursor_y: s.cursor_y,
-        held: s.held,
+        drag_x: s.drag_x,
+        drag_y: s.drag_y,
         ticks: s.ticks,
-        keys: s.keys,
         message: simcity::words::show_tool(tool).concat(", ").concat(simcity::words::show_cost(tool)),
         redraw: true
     })
@@ -254,9 +264,9 @@ nomethod fn with_speed(game: Game, speed: Speed) -> Game:
         origin_y: s.origin_y,
         cursor_x: s.cursor_x,
         cursor_y: s.cursor_y,
-        held: s.held,
+        drag_x: s.drag_x,
+        drag_y: s.drag_y,
         ticks: s.ticks,
-        keys: s.keys,
         message: speed_label(speed),
         redraw: true
     })
@@ -272,9 +282,9 @@ nomethod fn with_view(game: Game, origin_x: int, origin_y: int) -> Game:
         origin_y: origin_y,
         cursor_x: s.cursor_x,
         cursor_y: s.cursor_y,
-        held: s.held,
+        drag_x: s.drag_x,
+        drag_y: s.drag_y,
         ticks: s.ticks,
-        keys: s.keys,
         message: s.message,
         redraw: true
     })
@@ -282,9 +292,9 @@ nomethod fn with_view(game: Game, origin_x: int, origin_y: int) -> Game:
 
 # The pointer's tile, and whether it moved: the preview follows it, and a
 # frame is redrawn when it lands on a new tile.
-nomethod fn with_cursor(game: Game, cursor_x: int, cursor_y: int, held: bool) -> Game:
+nomethod fn with_cursor(game: Game, cursor_x: int, cursor_y: int) -> Game:
     s = state(game)
-    same = cursor_x == s.cursor_x and cursor_y == s.cursor_y and held == s.held
+    same = cursor_x == s.cursor_x and cursor_y == s.cursor_y
     put(game, State {
         city: s.city,
         tool: s.tool,
@@ -293,11 +303,33 @@ nomethod fn with_cursor(game: Game, cursor_x: int, cursor_y: int, held: bool) ->
         origin_y: s.origin_y,
         cursor_x: cursor_x,
         cursor_y: cursor_y,
-        held: held,
+        drag_x: s.drag_x,
+        drag_y: s.drag_y,
         ticks: s.ticks,
-        keys: s.keys,
         message: s.message,
         redraw: s.redraw or not same
+    })
+    game
+
+# The tile the drag is on: the last tile the pointer crossed with the button
+# held, and (-1, -1) when the button is not held on the map. It is where the
+# next move event walks a line from, so a drag Raven coalesced into one event
+# still crosses every tile it passed over.
+nomethod fn with_drag(game: Game, drag_x: int, drag_y: int) -> Game:
+    s = state(game)
+    put(game, State {
+        city: s.city,
+        tool: s.tool,
+        speed: s.speed,
+        origin_x: s.origin_x,
+        origin_y: s.origin_y,
+        cursor_x: s.cursor_x,
+        cursor_y: s.cursor_y,
+        drag_x: drag_x,
+        drag_y: drag_y,
+        ticks: s.ticks,
+        message: s.message,
+        redraw: s.redraw
     })
     game
 
@@ -305,6 +337,11 @@ nomethod fn with_cursor(game: Game, cursor_x: int, cursor_y: int, held: bool) ->
 
 nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
     window = raven::window("SimCity", WINDOW_WIDE, WINDOW_TALL)
+    # The window reports its keys, mouse buttons, pointer moves and wheel from
+    # now on. Watching consumes nothing: every control in it still takes its
+    # own click, its own key and its own change, which is why the map asks
+    # whether the pointer is inside its own rectangle before it builds.
+    window.watch_input(true)
     funds = raven::label(simcity::words::show_funds(city))
     people = raven::label(simcity::words::show_people(city))
     jobs = raven::label(simcity::words::show_jobs(city))
@@ -353,9 +390,9 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
         origin_y: 0,
         cursor_x: -1,
         cursor_y: -1,
-        held: false,
+        drag_x: -1,
+        drag_y: -1,
         ticks: 0,
-        keys: 0,
         message: "Build something.",
         redraw: true
     }
@@ -388,9 +425,9 @@ nomethod fn clear(game: Game) -> Game:
         origin_y: s.origin_y,
         cursor_x: s.cursor_x,
         cursor_y: s.cursor_y,
-        held: s.held,
+        drag_x: s.drag_x,
+        drag_y: s.drag_y,
         ticks: s.ticks,
-        keys: s.keys,
         message: s.message,
         redraw: false
     })
@@ -433,45 +470,169 @@ nomethod fn show(game: Game) -> Game:
     game.note.set_text(s.message)
     map_file(game)
 
-# --- The mouse -------------------------------------------------------------
+# --- The pointer -----------------------------------------------------------
 #
-# Raven reports control input through the package's event bridge, but the
-# bridge watches named widget kinds only: nothing watches the map, which is a
-# texture. So the map's mouse is read by polling the window, which is what a
-# game does anyway: the pointer's position and the button's state, then the
-# tile under it.
+# Raven 0.4.0 reports a watched window's input, and the map reads it the two
+# ways the package means it to be read. "Did the player press?" is an event:
+# `MousePressed` arrives once per press however long the button is held, so a
+# construction happens once and a held button spends nothing more. "Is it held
+# now, and where is the pointer?" is the state: `mouse_button_down?` for the
+# button, and the coordinates every input event carries.
+#
+# A drag is both at once: the move events, with the button's state asked of the
+# window rather than assumed. Raven coalesces the pointer moves of one frame
+# into a single `MouseMoved`, so the tiles between two observed positions are
+# walked here rather than assumed -- a fast drag crosses every tile it passed
+# over, and a slow one costs nothing extra.
+#
+# The pointer's coordinates are the window's logical units and so is the map's
+# rectangle, so the tile under a point is a subtraction and a division. A point
+# outside the map's rectangle is no tile at all -- not the tile at the edge,
+# and not the origin -- which is what keeps a click on the palette, on a label,
+# on the scroll row or in the save field from building on the map. The x and
+# the y are two numbers of one record (`raven::Point`, or an event's `x` and
+# `y`), not two out-parameters that could be given one address: the aliasing
+# that once coupled them cannot be expressed through this interface.
 
-nomethod fn tile_under(game: Game) -> simcity::screen::Place errors NonFiniteFloat:
-    laid_out = raven::rect(game.map):
+# A tile of the map, as the row and column the game builds on. (-1, -1) is no
+# tile, which is what a point off the map answers.
+struct Place:
+    x: int
+    y: int
+
+nomethod fn place_of(x: int, y: int) -> Place:
+    Place {x: x, y: y}
+
+# No tile: the pointer is outside the map.
+nomethod fn nowhere() -> Place:
+    place_of(-1, -1)
+
+# The distance from the map's edge to PX. The two are finite -- Raven answers
+# finite numbers -- but a Float64 subtraction can still overflow, and a
+# distance that is no number is a point that is nowhere on the map, which is
+# what it answers.
+nomethod fn offset(px: Float64, edge: Float64) -> Float64:
+    moved = px - edge:
         on NonFiniteFloat:
-            raven::Rect {x: 0.0, y: 0.0, width: 0.0, height: 0.0}
-    where = simcity::screen::mouse_at(game.window):
-        on NonFiniteFloat:
-            [0.0, 0.0]
-        on NativeViewNull:
-            [0.0, 0.0]
-        on IndexNotFound:
-            [0.0, 0.0]
-        on simcity::screen::OutOfRange:
-            [0.0, 0.0]
-    x = std::list::get(where, 0, 0.0) - laid_out.x
-    y = std::list::get(where, 1, 0.0) - laid_out.y
+            -1.0
+    moved
+
+# The tile the window point (PX, PY) is on, or none. The map's rectangle is
+# where the last frame laid it out, in the window's logical units, and the
+# pointer's coordinates are the same units, so the conversion needs no native
+# memory of this game's own: Raven answers a Point and a Rect, both finite.
+nomethod fn tile_at(map: raven::Rect, origin_x: int, origin_y: int, px: Float64, py: Float64) -> Place:
+    x = offset(px, map.x)
+    y = offset(py, map.y)
+    if x < 0.0 or y < 0.0 or x >= map.width or y >= map.height:
+        nowhere()
+    else:
+        place_of(origin_x + simcity::render::div(whole(x), TILE_PX), origin_y + simcity::render::div(whole(y), TILE_PX))
+
+# The tiles a drag crosses from (from_x, from_y) to (to_x, to_y): the first is
+# excluded, because it is where the press or the last move already built, and
+# the last is included, because it is where the pointer is now. The steps are
+# the line's, at one tile of resolution, so no tile the pointer passed over is
+# skipped and none is visited twice.
+nomethod fn steps_between(from_x: int, from_y: int, to_x: int, to_y: int) -> List[Place]:
+    dx = to_x - from_x
+    dy = to_y - from_y
+    far_x = if dx < 0:
+        -dx
+    else:
+        dx
+    far_y = if dy < 0:
+        -dy
+    else:
+        dy
+    count = if far_x > far_y:
+        far_x
+    else:
+        far_y
+    if count <= 0:
+        []
+    else:
+        loop i from 1 to count + 1:
+            step_x = if dx < 0:
+                -simcity::render::div(-2 * i * dx + count, 2 * count)
+            else:
+                simcity::render::div(2 * i * dx + count, 2 * count)
+            step_y = if dy < 0:
+                -simcity::render::div(-2 * i * dy + count, 2 * count)
+            else:
+                simcity::render::div(2 * i * dy + count, 2 * count)
+            place_of(from_x + step_x, from_y + step_y)
+
+# One construction action on the tile (X, Y), and what the rules say about it:
+# the tool is placed where it fits and charged for, a refusal says why, and the
+# inspector reads the tile instead of changing it.
+nomethod fn build_at(game: Game, x: int, y: int) -> Game:
     s = state(game)
-    tile = simcity::render::div(whole(x), TILE_PX):
-        on NonFiniteFloat:
-            0
-    row = simcity::render::div(whole(y), TILE_PX):
-        on NonFiniteFloat:
-            0
-    simcity::screen::place_of(s.origin_x + tile, s.origin_y + row)
+    if s.tool == Tool::Inspect:
+        with_message(game, simcity::words::show_tile(s.city, x, y))
+    else:
+        outcome = simcity::actions::fits(s.city, s.tool, x, y)
+        if outcome == simcity::actions::Placed::Built:
+            with_city(game, simcity::actions::place(s.city, s.tool, x, y))
+        else:
+            with_message(game, simcity::words::show_refusal(s.city, s.tool, x, y, outcome))
+
+# Builds along the tiles from (from_x, from_y) to (to_x, to_y) and leaves the
+# drag on the last of them: a line runs a tile at a time, and the treasury is
+# charged for each tile that was actually built.
+nomethod fn drag_along(game: Game, from_x: int, from_y: int, to_x: int, to_y: int) -> Game:
+    places = steps_between(from_x, from_y, to_x, to_y)
+    built = fold stop in places with intermediate made game:
+        if simcity::city::inside?(state(made).city, stop.x, stop.y):
+            build_at(made, stop.x, stop.y)
+        else:
+            made
+    with_drag(built, to_x, to_y)
+
+# The left button went down. On the map it is one construction action on the
+# tile under the pointer, and the start of a drag. Anywhere else -- the
+# palette, a label, the scroll row, the save field, the tax box -- the pointer
+# is not inside the map's rectangle, so the map builds nothing and Raven's own
+# control takes its click exactly as it would without the input hook.
+nomethod fn press(game: Game, event: raven::Event, map: raven::Rect) -> Game:
+    s = state(game)
+    at = tile_at(map, s.origin_x, s.origin_y, event.x, event.y)
+    if at.x < 0:
+        with_cursor(game, -1, -1)
+    else:
+        started = with_cursor(game, at.x, at.y)
+        with_drag(build_at(started, at.x, at.y), at.x, at.y)
+
+# The pointer moved. The preview follows it. A drag -- the button held since a
+# press on the map -- builds along the tiles the pointer crossed, and the
+# button's state is asked of the window rather than inferred from the events:
+# it is the one question the events do not answer, and a button let go outside
+# the window must not go on building.
+nomethod fn move_pointer(game: Game, event: raven::Event, map: raven::Rect) -> Game:
+    s = state(game)
+    at = tile_at(map, s.origin_x, s.origin_y, event.x, event.y)
+    shown = with_cursor(game, at.x, at.y)
+    t = state(shown)
+    held = shown.window.mouse_button_down?(raven::window::R_MOUSE_LEFT)
+    if at.x < 0:
+        with_drag(shown, -1, -1)
+    elif t.drag_x >= 0 and held:
+        drag_along(shown, t.drag_x, t.drag_y, at.x, at.y)
+    else:
+        shown
+
+# The left button went up: the drag is over, and a pointer that moves after it
+# builds nothing until it is pressed on the map again.
+nomethod fn release(game: Game) -> Game:
+    with_drag(game, -1, -1)
 
 # The tile the pointer is over right now, read from the window: the preview
 # follows the pointer, and this is what a test aims at.
-nomethod fn where_is_the_cursor(game: Game) -> simcity::screen::Place:
-    under = tile_under(game):
-        on NonFiniteFloat:
-            simcity::screen::place_of(-1, -1)
-    under
+nomethod fn where_is_the_cursor(game: Game) -> Place:
+    s = state(game)
+    map = raven::rect(game.map)
+    here = raven::mouse_position(game.window)
+    tile_at(map, s.origin_x, s.origin_y, here.x, here.y)
 
 # --- What the player does --------------------------------------------------
 
@@ -630,122 +791,82 @@ nomethod fn act(game: Game, name: str) -> Game:
     else:
         game
 
-# --- The view, and the keys that move it ------------------------------------
+# --- The keys, and the wheel ------------------------------------------------
 #
-# The map is four times the viewport, so the view has to move. Raven's event
-# bridge reports named actions and value changes, and Raven does not hand a key
-# press to it, so the keys are polled instead: the same mechanism the mouse
-# uses, once a frame, from `simcity::screen::key_down`.
+# The view moves with the four arrow keys, and a key press is an event: one
+# `KeyPressed` per press, however long the key is held. Raven's own auto-repeat
+# arrives as `KeyRepeated` and is deliberately not acted on, which is the
+# behaviour the polled mask had -- a held key moves the view one step and then
+# waits to be released. No other key does anything.
 #
-# Four keys, one bit each, so the previous frame's mask is one integer and a
-# press is a bit that is set now and was not set before.
-KEY_LEFT = 1
+# The wheel scrolls the view, one step a line: the same step the arrow keys and
+# the four buttons under the map move it by, because that is the one scrolling
+# this game does -- there is no zoom for a wheel to scale. A `Wheel` event is
+# answered here rather than dropped by falling through, so it can never be
+# mistaken for a construction, and the view is the only thing it moves.
 
-KEY_RIGHT = 2
-
-KEY_UP = 4
-
-KEY_DOWN = 8
-
-# The four arrow keys, as a mask: 0 for none of them, and one bit per key.
-nomethod fn key_mask(game: Game) -> int:
-    left = if simcity::screen::key_down(game.window, raven::window::R_KEY_LEFT):
-        KEY_LEFT
-    else:
-        0
-    right = if simcity::screen::key_down(game.window, raven::window::R_KEY_RIGHT):
-        KEY_RIGHT
-    else:
-        0
-    up = if simcity::screen::key_down(game.window, raven::window::R_KEY_UP):
-        KEY_UP
-    else:
-        0
-    down = if simcity::screen::key_down(game.window, raven::window::R_KEY_DOWN):
-        KEY_DOWN
-    else:
-        0
-    left + right + up + down
-
-# WHETHER the key BIT is set now and was not set before: a key held down moves
-# the view one step and then waits to be released, which is what a key does.
-nomethod fn just_pressed(now: int, was: int, bit: int) -> bool:
-    bit_and(now, bit) != 0 and bit_and(was, bit) == 0
-
-# Reading the keys, and moving the view by one step for each one pressed
-# since the last frame. The new mask is stored, so a held key moves the view
-# once rather than once a frame.
-nomethod fn read_keys(game: Game) -> Game:
-    s = state(game)
-    now = key_mask(game)
-    moved = if just_pressed(now, s.keys, KEY_LEFT):
+# A key went down: the four arrow keys move the view one step.
+nomethod fn key_press(game: Game, key: int) -> Game:
+    if key == raven::window::R_KEY_LEFT:
         scroll(game, -1, 0)
-    elif just_pressed(now, s.keys, KEY_RIGHT):
+    elif key == raven::window::R_KEY_RIGHT:
         scroll(game, 1, 0)
-    elif just_pressed(now, s.keys, KEY_UP):
+    elif key == raven::window::R_KEY_UP:
         scroll(game, 0, -1)
-    elif just_pressed(now, s.keys, KEY_DOWN):
+    elif key == raven::window::R_KEY_DOWN:
         scroll(game, 0, 1)
     else:
         game
-    t = state(moved)
-    put(moved, State {
-        city: t.city,
-        tool: t.tool,
-        speed: t.speed,
-        origin_x: t.origin_x,
-        origin_y: t.origin_y,
-        cursor_x: t.cursor_x,
-        cursor_y: t.cursor_y,
-        held: t.held,
-        ticks: t.ticks,
-        keys: now,
-        message: t.message,
-        redraw: t.redraw
-    })
-    moved
 
-nomethod fn accept(game: Game, event: raven::Event) -> Game:
+# The wheel turned: the view moves one step a line, up and left positive. A
+# turn is never a construction.
+nomethod fn wheel_turn(game: Game, event: raven::Event) -> Game:
+    if event.dy > 0.5:
+        scroll(game, 0, -1)
+    elif event.dy < -0.5:
+        scroll(game, 0, 1)
+    elif event.dx > 0.5:
+        scroll(game, -1, 0)
+    elif event.dx < -0.5:
+        scroll(game, 1, 0)
+    else:
+        game
+
+# One event of a watched window, answered: what the controls report, what the
+# keys do, and what the pointer and the wheel do. An event nobody here claims is
+# dropped -- a held key's auto-repeat (`KeyRepeated`) among them, which is what
+# makes a held key move the view once.
+nomethod fn accept(game: Game, event: raven::Event, map: raven::Rect) -> Game:
     if event.kind == raven::EventKind::Action:
         act(game, event.text)
     elif event.kind == raven::EventKind::ValueChanged:
         rate(game)
+    elif event.kind == raven::EventKind::KeyPressed:
+        key_press(game, event.value)
+    elif event.kind == raven::EventKind::MousePressed and event.value == raven::window::R_MOUSE_LEFT:
+        press(game, event, map)
+    elif event.kind == raven::EventKind::MouseMoved:
+        move_pointer(game, event, map)
+    elif event.kind == raven::EventKind::MouseReleased:
+        release(game)
+    elif event.kind == raven::EventKind::Wheel:
+        wheel_turn(game, event)
     else:
         game
 
-# --- The loop --------------------------------------------------------------
+# One frame's events, taken and answered. The game's loop drives exactly this,
+# so what a test drives by injecting input is the code the game runs.
+nomethod fn take_events(game: Game) -> Game:
+    map = raven::rect(game.map)
+    fold event in raven::events() with intermediate s game:
+        accept(s, event, map)
 
-# The pointer and the button, read once a frame: a click builds, a drag runs
-# a line, and the tile under the pointer is drawn as the placement preview.
+# --- The loop --------------------------------------------------------------
 #
-# A click is one placement, and holding the button is not a second one. Raven
-# reports the button's *state* once a frame and never reports a press, so the
-# press has to be derived: the button's state and the tile it was on are both
-# stored between frames, and a placement happens when the button has gone down
-# or when the pointer has moved onto a tile it was not on. Dragging along a
-# road therefore runs the line a tile at a time, and resting the button on the
-# tile just built builds nothing.
-nomethod fn read_mouse(game: Game) -> Game errors NonFiniteFloat:
-    where = tile_under(game)
-    button = simcity::screen::down?(game.window, raven::window::R_MOUSE_LEFT)
-    s = state(game)
-    pressed = button and not s.held
-    moved = where.x != s.cursor_x or where.y != s.cursor_y
-    building = button and (pressed or moved) and simcity::city::inside?(s.city, where.x, where.y)
-    if building:
-        if s.tool == Tool::Inspect:
-            looked = with_message(game, simcity::words::show_tile(s.city, where.x, where.y))
-            with_cursor(looked, where.x, where.y, button)
-        else:
-            outcome = simcity::actions::fits(s.city, s.tool, where.x, where.y)
-            if outcome == simcity::actions::Placed::Built:
-                built = with_city(game, simcity::actions::place(s.city, s.tool, where.x, where.y))
-                with_cursor(built, where.x, where.y, button)
-            else:
-                said = with_message(game, simcity::words::show_refusal(s.city, s.tool, where.x, where.y, outcome))
-                with_cursor(said, where.x, where.y, button)
-    else:
-        with_cursor(game, where.x, where.y, button)
+# One frame: wait for it, answer its events, run the city's clock, draw. The
+# events are what a click is -- one press, one construction -- so the loop no
+# longer derives a press by comparing one frame's button state with the last,
+# and a button held still spends nothing because nothing is delivered.
 
 # One simulated month when the tempo's worth of timer ticks has gone by, and
 # the city keeps running while the player is, because a frame never blocks.
@@ -770,24 +891,21 @@ nomethod fn month(game: Game) -> Game:
         origin_y: s.origin_y,
         cursor_x: s.cursor_x,
         cursor_y: s.cursor_y,
-        held: s.held,
+        drag_x: s.drag_x,
+        drag_y: s.drag_y,
         ticks: next_ticks,
-        keys: s.keys,
         message: s.message,
         redraw: s.redraw or enough
     })
     game
 
-nomethod fn run(game: Game) -> unit errors NonFiniteFloat:
+nomethod fn run(game: Game) -> unit:
     awake = raven::wait_frame(-1.0)
     if not awake:
         unit
     else:
-        heard = fold event in raven::events() with intermediate s game:
-            accept(s, event)
-        steered = read_keys(heard)
-        moved = read_mouse(steered)
-        next = month(moved)
+        heard = take_events(game)
+        next = month(heard)
         shown = show(next)
         run(shown)
 

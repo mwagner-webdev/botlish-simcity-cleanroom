@@ -8,27 +8,57 @@
 # after.pixels`, as the way to see that a change was drawn. It is the whole
 # test: a texture uploaded into a widget that is not an image draws nothing,
 # and both frames are then the same picture.
+#
+# The same comparison answers the second question: a click on the map builds a
+# road, the road is drawn into the texture, and the window's pixels change
+# again. That is the input path the player uses -- a MousePressed event, not a
+# polled button -- checked on the renderer that actually draws it.
 import raven
 import raven::widget
+import raven::window
+import std::float64
 import std::int
 import std::str
 import simcity::app
 import simcity::city
 import simcity::scenario
 import simcity::screen
+import simcity::store
 
 with context raven::create()
 with context simcity::screen::create()
+with context simcity::store::create()
 
-nomethod fn frame() -> bool errors NonFiniteFloat:
-    drawn = raven::draw_frame():
-        on NonFiniteFloat:
-            false
-    drawn
+# One frame: false once the last window closed.
+nomethod fn frame() -> bool:
+    raven::draw_frame()
 
 # WHETHER the two frames differ anywhere.
 nomethod fn changed(before: raven::Image, after: raven::Image) -> bool:
     before.width != after.width or before.height != after.height or before.pixels != after.pixels
+
+# WHETHER the tile takes a road: not water, and holding nothing yet.
+nomethod fn buildable?(city: simcity::city::City, col: int, row: int) -> bool:
+    if simcity::city::terrain(city, col, row) == simcity::city::WATER:
+        false
+    elif simcity::city::road_at(city, col, row) != 0 or simcity::city::rail_at(city, col, row) != 0:
+        false
+    elif simcity::city::wire_at(city, col, row) != 0:
+        false
+    else:
+        simcity::city::zone_at(city, col, row) == simcity::city::NONE
+
+# The first tile of the viewport that takes a road, or none: the same scan the
+# headless input suite uses, because the map is the same either way.
+nomethod fn buildable_spot(city: simcity::city::City, origin_x: int, origin_y: int, row: int, col: int) -> simcity::app::Place:
+    if row >= simcity::app::DOWN:
+        simcity::app::place_of(-1, -1)
+    elif col >= simcity::app::ACROSS:
+        buildable_spot(city, origin_x, origin_y, row + 1, 0)
+    elif buildable?(city, origin_x + col, origin_y + row):
+        simcity::app::place_of(col, row)
+    else:
+        buildable_spot(city, origin_x, origin_y, row, col + 1)
 
 fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
     raven::start(raven::desktop())
@@ -52,8 +82,34 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
         1
     else:
         0
+    # A click on the map: the pointer moves to the middle of a tile that takes
+    # a road, the left button goes down and up, a frame delivers it, and the
+    # game's own event step answers the press. The road is drawn into the
+    # texture and the window's pixels change once more.
+    at = buildable_spot(town, 0, 0, 0, 0)
+    where = raven::rect(game.map)
+    roaded = simcity::app::with_tool(shown, simcity::city::Tool::Road)
+    picked = simcity::app::show(roaded)
+    aim = picked.window.inject_move(where.x + std::float64::from_int(at.x * simcity::app::TILE_PX + 8), where.y + std::float64::from_int(at.y * simcity::app::TILE_PX + 8)):
+        on NonFiniteFloat:
+            unit
+    moved = frame()
+    down = picked.window.inject_button(raven::window::R_MOUSE_LEFT, true)
+    pressed = frame()
+    clicked = simcity::app::take_events(picked)
+    up = clicked.window.inject_button(raven::window::R_MOUSE_LEFT, false)
+    released = frame()
+    drawn_road = simcity::app::show(clicked)
+    fourth = frame()
+    fifth = frame()
+    after_road = raven::capture(game.window)
+    road_there = if changed(after, after_road):
+        1
+    else:
+        0
+    road_on = simcity::city::road_at(simcity::app::state(clicked).city, at.x, at.y)
     raven::stop()
-    ["the frame is ".concat(std::int::to_string(after.width)).concat(" by ").concat(std::int::to_string(after.height)), "the map is an image widget ".concat(std::int::to_string(is_image)), "the first draw changed the window ".concat(std::int::to_string(drawn))]
+    ["the frame is ".concat(std::int::to_string(after.width)).concat(" by ").concat(std::int::to_string(after.height)), "the map is an image widget ".concat(std::int::to_string(is_image)), "the first draw changed the window ".concat(std::int::to_string(drawn)), "a click drew a road ".concat(std::int::to_string(road_there)).append_char(' ').concat(std::int::to_string(road_on))]
 
 result = main():
     on raven::RavenFailed failure:

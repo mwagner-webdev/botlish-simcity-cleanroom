@@ -1,0 +1,129 @@
+# perf.bot -- the game's per-frame input cost, measured on the 0.4.0 code.
+#
+# The same workload as perf_old.bot in the 0.3.1 tree: a thousand frames of a
+# pointer walked across the whole map with the left button held (a drag), the
+# input answered once a frame the way the 0.4.0 game does -- the frame's events,
+# and the button's state asked of the window -- and the map uploaded every
+# twentieth frame. Then three thousand more pointer moves, one a frame, with
+# nothing uploaded: the frames themselves, and the input they delivered.
+import raven
+import raven::core
+import raven::window
+import std::float64
+import std::int
+import std::list
+import std::str
+import simcity::app
+import simcity::city
+import simcity::render
+import simcity::screen
+import simcity::store
+
+with context raven::create()
+with context simcity::screen::create()
+with context simcity::store::create()
+
+nomethod fn whole(value: Float64) -> int:
+    std::float64::truncate(value)
+
+# The whole remainder of N over DIVISOR: Botlish has no integer division, and
+# neither operand is negative here.
+nomethod fn leftover(n: int, divisor: int) -> int:
+    n - simcity::render::div(n, divisor) * divisor
+
+nomethod fn road_count(city: simcity::city::City) -> int:
+    fold row from 0 to city.height with intermediate made 0:
+        fold col from 0 to city.width with intermediate u made:
+            u + simcity::city::road_at(city, col, row)
+
+# Where this frame's number puts the pointer, over the map.
+nomethod fn spot(i: int, across: int, down: int) -> List[Float64] errors NonFiniteFloat:
+    x = std::float64::from_int(leftover(i * 7, across - 12) + 6)
+    y = std::float64::from_int(36 + leftover(i * 5, down - 12) + 6)
+    [x, y]
+
+# The pointer is moved to where this frame's number puts it, and a frame
+# delivers it.
+nomethod fn moved_to(game: simcity::app::Game, i: int) -> unit errors NonFiniteFloat:
+    at = spot(i, simcity::app::ACROSS * simcity::app::TILE_PX, simcity::app::DOWN * simcity::app::TILE_PX)
+    aim = game.window.inject_move(at.get(0, 0.0), at.get(1, 0.0)):
+        on NonFiniteFloat:
+            unit
+    drawn = raven::draw_frame()
+    unit
+
+# One frame: the pointer is moved to where this frame's number puts it, the
+# frame delivers what happened, and the game's own event step answers it.
+# The pointer is moved to where this frame's number puts it, with no frame
+# drawn: three of these and one frame is three moves Raven coalesces.
+nomethod fn moved_to_dry(game: simcity::app::Game, i: int) -> unit errors NonFiniteFloat:
+    at = spot(i, simcity::app::ACROSS * simcity::app::TILE_PX, simcity::app::DOWN * simcity::app::TILE_PX)
+    aim = game.window.inject_move(at.get(0, 0.0), at.get(1, 0.0)):
+        on NonFiniteFloat:
+            unit
+    unit
+
+nomethod fn step(game: simcity::app::Game, i: int, keep: int) -> simcity::app::Game errors NonFiniteFloat:
+    moved_to(game, i)
+    heard = simcity::app::take_events(game)
+    shown = if keep > 0:
+        simcity::app::show(heard)
+    else:
+        heard
+    shown
+
+fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
+    raven::start(raven::headless())
+    town = simcity::city::make(simcity::app::MAP_WIDE, simcity::app::MAP_TALL, 4242, 20000)
+    game = simcity::app::build(town)
+    laid = raven::draw_frame()
+    paused = simcity::app::with_speed(game, simcity::app::Speed::Paused)
+    picked = simcity::app::with_tool(paused, simcity::city::Tool::Road)
+    shown = simcity::app::show(picked)
+    more = raven::draw_frame()
+    # The pointer is put over the map first, so the press is a press on the
+    # map: a press anywhere else is Raven's own to answer.
+    moved_to(shown, 3)
+    answered = simcity::app::take_events(shown)
+    held = game.window.inject_button(raven::window::R_MOUSE_LEFT, true)
+    delivered = raven::draw_frame()
+    picked_up = simcity::app::take_events(answered)
+    first = raven::core::Rget_time()
+    run = fold i from 0 to 1000 with intermediate s picked_up:
+        keep = if leftover(i, 20) == 0:
+            1
+        else:
+            0
+        step(s, i, keep)
+    middle = raven::core::Rget_time()
+    # Three thousand pointer moves, three a frame: what a pointer moved faster
+    # than the frames arrived looks like. Raven coalesces the moves of one
+    # frame into a single event, so the game answers one event per frame and
+    # walks the tiles the pointer crossed.
+    walked = fold i from 0 to 1000 with intermediate s run:
+        base = i * 3
+        moved_to_dry(s, base)
+        moved_to_dry(s, base + 1)
+        moved_to_dry(s, base + 2)
+        drawn = raven::draw_frame()
+        answered = simcity::app::take_events(s)
+        answered
+    idle_start = raven::core::Rget_time()
+    idle = fold i from 0 to 2000 with intermediate s walked:
+        drawn = raven::draw_frame()
+        answered = simcity::app::take_events(s)
+        answered
+    last = raven::core::Rget_time()
+    idle_ms = whole((last - idle_start) * 1000.0)
+    city = simcity::app::state(idle).city
+    raven::stop()
+    frames_ms = whole((middle - first) * 1000.0)
+    moves_ms = whole((last - middle) * 1000.0)
+    ["1000 frames of dragged input took ".concat(std::int::to_string(frames_ms)).concat(" ms"), "3000 moves, 3 a frame, took ".concat(std::int::to_string(moves_ms)).concat(" ms"), "2000 idle frames took ".concat(std::int::to_string(idle_ms)).concat(" ms"), "roads ".concat(std::int::to_string(road_count(city))), "funds ".concat(std::int::to_string(simcity::city::funds(city)))]
+
+result = main():
+    on raven::RavenFailed failure:
+        [failure.detail]
+    on NonFiniteFloat:
+        ["no clock"]
+result

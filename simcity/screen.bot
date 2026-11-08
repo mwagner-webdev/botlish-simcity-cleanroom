@@ -1,16 +1,22 @@
 # simcity::screen -- the game's one layer of raw native memory.
 #
-# Two things in this game cannot be done through a wrapped call, and both
-# need memory of our own that C writes into:
+# One thing in this game cannot be done through a wrapped call, and it needs
+# memory of our own that C writes into:
 #
 #   * Raven draws what a texture holds, and a texture is made from RGBA bytes
 #     in native memory. The screen holds one buffer of `4 * width * height`
 #     bytes, uploads it and keeps it alive while the screen lives.
-#   * Raven reports control input through the package's event bridge, but the
-#     bridge watches named widget kinds only: nothing watches the map the game
-#     draws into a texture. So the game polls the window, through the generated
-#     binding of Raven's own polling functions, and those write C floats into
-#     out-parameters of our own.
+#
+# Nothing else does. Raven 0.3.2 exposed widget events only -- nothing watched
+# the map the game draws into a texture -- so the map's mouse was polled
+# through the generated binding, with two C floats of this module's own for the
+# out-parameters. Raven 0.4.0 supplies `watch_input`, the events it reports and
+# the state queries, and `mouse_position` answers a Point out of Raven's own
+# scratch memory: the game no longer holds a cell for a pointer coordinate, and
+# the aliasing that one address for two out-parameters made possible is no
+# longer expressible. What is left here is a texture's buffer, and the two
+# floats Raven writes a widget's desired size into -- which the package does
+# not wrap.
 #
 # Because that is where raw authority lives, the module needs a context of its
 # own: `Screen` owns the native memory, is installed once by the entry program,
@@ -18,19 +24,15 @@
 
 import std::abi
 
+import std::abi::bytes
+
 import std::binary
 
 import std::binary::native
 
-import std::abi::bytes
-
 import std::byte
 
 import std::ffi::c
-
-import std::list
-
-import std::mutable_array
 
 import std::mutable_vector
 
@@ -39,7 +41,6 @@ import raven
 import raven::resources
 
 import raven::widget
-import raven::window
 
 extern c library "raven_bridge" static
 
@@ -72,17 +73,10 @@ nomethod fn c_int(n: int) -> std::ffi::c::Int errors OutOfRange:
         fail OutOfRange
     n
 
-nomethod fn flat_bytes(rows: List[List[std::byte::Byte]]) -> List[std::byte::Byte]:
-    std::list::flat(rows)
-
-# One allocation of this module's memory. The pointer Raven writes the mouse's
-# position into is TWO pointers, one for x and one for y: a C pointer has no
-# arithmetic, so the pair cannot be one stepped pointer, and passing one
-# address for both would write y over x and leave the other unwritten.
+# One allocation of this module's memory: the frame buffer a texture is
+# uploaded from, and the two floats Raven writes a widget's desired size into.
 private struct Cell:
     bytes: std::ffi::c::Ptr[std::ffi::c::UChar]
-    mx: std::ffi::c::Ptr[std::ffi::c::Float]
-    my: std::ffi::c::Ptr[std::ffi::c::Float]
     wish_w: std::ffi::c::Ptr[std::ffi::c::Float]
     wish_h: std::ffi::c::Ptr[std::ffi::c::Float]
     size: int
@@ -97,15 +91,16 @@ private layout FloatCell:
 nomethod fn sized?(width: int, height: int) -> bool:
     width > 0 and height > 0 and 4 * width * height < 2147483647
 
-# The screen's native memory: the frame buffer and the mouse's two floats.
+# The screen's native memory.
 opaque context struct Screen:
     cells: MutableVector[Cell]
 
 nomethod fn create() -> Screen:
     Screen {cells: std::mutable_vector::from_list([])}
 
-# Allocates a 4 * WIDTH * HEIGHT byte frame buffer and the mouse's
-# out-parameters. OutOfRange: the size is no C number, or there is no memory.
+# Allocates a 4 * WIDTH * HEIGHT byte frame buffer and the two floats a
+# widget's desired size is read into. OutOfRange: the size is no C number, or
+# there is no memory.
 nomethod fn open(width: int, height: int, context s: Screen) -> unit errors OutOfRange:
     total = 4 * width * height
     want = if sized?(width, height):
@@ -114,26 +109,18 @@ nomethod fn open(width: int, height: int, context s: Screen) -> unit errors OutO
         0
     if s.cells.empty?():
         frame = u_long(1).calloc(u_long(want))
-        mx = u_long(1).calloc(u_long(4))
-        my = u_long(1).calloc(u_long(4))
         wide = u_long(1).calloc(u_long(4))
         tall = u_long(1).calloc(u_long(4))
-        if frame.null?() or mx.null?() or my.null?() or wide.null?() or tall.null?():
+        if frame.null?() or wide.null?() or tall.null?():
             gone = std::ffi::c::erase(frame)
-            gone2 = std::ffi::c::erase(mx)
-            gone3 = std::ffi::c::erase(my)
-            gone4 = std::ffi::c::erase(wide)
-            gone5 = std::ffi::c::erase(tall)
+            gone2 = std::ffi::c::erase(wide)
+            gone3 = std::ffi::c::erase(tall)
             free(gone)
             free(gone2)
             free(gone3)
-            free(gone4)
-            free(gone5)
             fail OutOfRange
         cell = Cell {
             bytes: std::ffi::c::retype[std::ffi::c::UChar](frame),
-            mx: std::ffi::c::retype[std::ffi::c::Float](mx),
-            my: std::ffi::c::retype[std::ffi::c::Float](my),
             wish_w: std::ffi::c::retype[std::ffi::c::Float](wide),
             wish_h: std::ffi::c::retype[std::ffi::c::Float](tall),
             size: total
@@ -144,17 +131,13 @@ nomethod fn open(width: int, height: int, context s: Screen) -> unit errors OutO
 
 nomethod fn release(context s: Screen) -> unit errors IndexNotFound:
     cell = s.cells.pop()
-    {bytes, mx, my, wish_w, wish_h} = cell
+    {bytes, wish_w, wish_h} = cell
     gone = std::ffi::c::erase(bytes)
-    gone2 = std::ffi::c::erase(mx)
-    gone3 = std::ffi::c::erase(my)
-    gone4 = std::ffi::c::erase(wish_w)
-    gone5 = std::ffi::c::erase(wish_h)
+    gone2 = std::ffi::c::erase(wish_w)
+    gone3 = std::ffi::c::erase(wish_h)
     free(gone)
     free(gone2)
     free(gone3)
-    free(gone4)
-    free(gone5)
 
 # Raven's handle for a texture holding PIXELS, which must be exactly
 # 4 * WIDTH * HEIGHT bytes: it is lent read-only for the upload.
@@ -174,39 +157,20 @@ nomethod fn show(pixels: std::abi::bytes::Bytes, texture: std::ffi::c::UInt, wid
     pixels.botlish_raven_bytes_copy(s.cells.element(0).bytes, count)
     texture.Rtexture_update(s.cells.element(0).bytes, wide, high)
 
-# The mouse's position in the window's last frame, in logical units: Raven
-# writes it into the screen's out-parameters and they are read back. A NaN or
-# an infinity, which no window reports, is NonFiniteFloat.
-nomethod fn mouse_at(window: raven::Window, context s: Screen) -> List[Float64] errors IndexNotFound, NativeViewNull, OutOfRange, NonFiniteFloat:
-    window.id.Rwindow_get_mouse_position(s.cells.element(0).mx, s.cells.element(0).my)
-    here = std::binary::native::view(FloatCell, s.cells.element(0).mx)
-    there = std::binary::native::view(FloatCell, s.cells.element(0).my)
-    [here.value, there.value]
-
 # The size a widget would like to be, in logical units: Raven's own measure,
 # which is how a window knows whether a control it is about to hold actually
 # fits. A control laid out outside its parent's slot is never drawn and can
 # never be clicked, so the natural size is the number that decides whether a
-# palette is reachable.
+# palette is reachable. Raven does not wrap this one, so the two floats are
+# still this module's own -- and they are the only raw input-adjacent authority
+# the game holds, which is a size rather than a pointer.
 nomethod fn wish(widget: raven::Widget, context s: Screen) -> List[Float64] errors IndexNotFound, NativeViewNull, OutOfRange, NonFiniteFloat:
     widget.id.Rwidget_get_desired_size(s.cells.element(0).wish_w, s.cells.element(0).wish_h)
     from = std::binary::native::view(FloatCell, s.cells.element(0).wish_w)
     to = std::binary::native::view(FloatCell, s.cells.element(0).wish_h)
     [from.value, to.value]
 
-nomethod fn down?(window: raven::Window, button: std::ffi::c::UInt) -> bool:
-    window.id.Rwindow_is_mouse_button_down(button) != 0
-
-nomethod fn key_down(window: raven::Window, key: std::ffi::c::UInt) -> bool:
-    window.id.Rwindow_is_key_down(key) != 0
-
-nomethod fn inside(window: raven::Window) -> bool:
-    raven::window::Rwindow_is_mouse_inside(window.id) != 0
-
-# A point of the window, as the x and y the map's tiles are measured from.
-struct Place:
-    x: int
-    y: int
-
-nomethod fn place_of(x: int, y: int) -> Place:
-    Place {x: x, y: y}
+# End of the module. Raven 0.4.0's `key_down?`, `mouse_button_down?`,
+# `mouse_inside?`, `modifiers_down` and `mouse_position` answer every question
+# these four functions answered, and the events answer the one they could not:
+# that a key or a button *was* pressed, rather than that it is held now.

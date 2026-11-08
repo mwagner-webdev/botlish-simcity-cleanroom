@@ -3,15 +3,15 @@
   "name": "simcity",
   "version": "0.1.0",
   "dependencies": {
-    "raven": "0.3"
+    "raven": "0.4"
   },
   "lock": {
-    "raven": "0.3.1"
+    "raven": "0.4.0"
   },
   "sources": {
     "raven": {
-      "archive": "raven-0.3.1.botpkg",
-      "sha256": "9336738e652d741e5a2d4785dcc1dc36f2e0b6f4d24329a20a0707df28ac5812"
+      "archive": "raven-0.4.0.botpkg",
+      "sha256": "c6acd0815bb9dc772a936cad7f7463ed02fec1eeb44315730faf38ca96c76402"
     }
   }
 }

@@ -13,6 +13,11 @@
 #   2. choosing a tool and clicking the map builds, and the treasury moves;
 #   3. choosing the inspect tool and clicking a developed tile says what is
 #      there.
+#
+# The driving is Raven 0.4.0's own synthetic input (`inject_move`,
+# `inject_button`, `inject_key_down`) and the game's own event step
+# (`simcity::app::take_events`), which is what the game's loop calls after a
+# frame: a test drives exactly the code the game runs.
 import raven
 import std::float64
 import std::int
@@ -42,11 +47,9 @@ nomethod fn whole(value: Float64) -> int:
 
 # Draws TIMES frames and answers how many were drawn: a fold over one count,
 # so the function has one exit rather than two that both answer zero.
-nomethod fn frames(times: int) -> int errors NonFiniteFloat:
+nomethod fn frames(times: int) -> int:
     fold i from 0 to times with intermediate drawn 0:
-        more = raven::draw_frame():
-            on NonFiniteFloat:
-                false
+        more = raven::draw_frame()
         if more:
             drawn + 1
         else:
@@ -54,10 +57,7 @@ nomethod fn frames(times: int) -> int errors NonFiniteFloat:
 
 # Where the widget was laid out by the last frame.
 nomethod fn at(widget: raven::Widget) -> raven::Rect:
-    measured = raven::rect(widget):
-        on NonFiniteFloat:
-            raven::Rect {x: 0.0, y: 0.0, width: 0.0, height: 0.0}
-    measured
+    raven::rect(widget)
 
 # Every road tile in the city.
 nomethod fn road_count(city: simcity::city::City) -> int:
@@ -67,11 +67,12 @@ nomethod fn road_count(city: simcity::city::City) -> int:
 
 # Aims at the window point (PX, PY), lets the frames deliver it, and answers
 # the tile the pointer lands on: the row and column the game would build on.
-nomethod fn point(game: simcity::app::Game, laid: raven::Rect, px: int, py: int) -> simcity::screen::Place errors NonFiniteFloat:
-    game.window.id.Rwindow_inject_mouse_move(laid.x + std::float64::from_int(px), laid.y + std::float64::from_int(py))
+nomethod fn point(game: simcity::app::Game, laid: raven::Rect, px: int, py: int) -> simcity::app::Place errors NonFiniteFloat:
+    aim = game.window.inject_move(laid.x + std::float64::from_int(px), laid.y + std::float64::from_int(py)):
+        on NonFiniteFloat:
+            unit
     moved = frames(4)
-    under = simcity::app::where_is_the_cursor(game)
-    under
+    simcity::app::where_is_the_cursor(game)
 
 nomethod fn inside_code(row: int, col: int) -> int:
     if row >= 0 and col >= 0 and row < simcity::app::DOWN and col < simcity::app::ACROSS:
@@ -80,8 +81,15 @@ nomethod fn inside_code(row: int, col: int) -> int:
         0
 
 # The tile's code: 1 on the map's viewport, 0 outside it.
-nomethod fn code_of(place: simcity::screen::Place) -> int:
+nomethod fn code_of(place: simcity::app::Place) -> int:
     inside_code(place.y, place.x)
+
+# The left button goes down at where the pointer is, a frame delivers the press,
+# and the game answers it: this is what a click is, from here on.
+nomethod fn click(game: simcity::app::Game) -> simcity::app::Game:
+    pressed = game.window.inject_button(raven::window::R_MOUSE_LEFT, true)
+    delivered = frames(4)
+    simcity::app::take_events(game)
 
 fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
     raven::start(raven::headless())
@@ -104,30 +112,29 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
     picked = simcity::app::with_tool(shown, simcity::city::Tool::Road)
     chosen = simcity::app::show(picked)
     chosen_frames = frames(6)
-    game.window.id.Rwindow_inject_mouse_button(raven::window::R_MOUSE_LEFT, 1)
-    pressed = frames(4)
-    clicked = simcity::app::read_mouse(chosen)
+    clicked = click(chosen)
     delivered = frames(4)
     built = simcity::app::state(clicked).city
     spent = 20000 - simcity::city::funds(built)
-    # Holding the button must not keep paying. Raven reports the button's state
-    # once a frame and never reports a press, so the game derives the press:
-    # the button and the tile are stored between frames, and a placement happens
-    # when the button has gone down or the pointer has moved onto a new tile.
-    # Aim at a bare tile, press, and read the mouse three times without moving:
-    # the first costs a road, the next two cost nothing.
-    game.window.id.Rwindow_inject_mouse_move(where.x + std::float64::from_int(2 * simcity::app::TILE_PX + 8), where.y + std::float64::from_int(2 * simcity::app::TILE_PX + 8))
+    # Holding the button must not keep paying. A press is one event, so a button
+    # held over one tile is one MousePressed however long it is held, and the
+    # frames after it deliver nothing further: aim at a bare tile, press, and
+    # answer the events three times -- the press costs a road and the two that
+    # follow it cost nothing, because there is nothing left to answer.
+    aim = game.window.inject_move(where.x + std::float64::from_int(2 * simcity::app::TILE_PX + 8), where.y + std::float64::from_int(2 * simcity::app::TILE_PX + 8)):
+        on NonFiniteFloat:
+            unit
     holding = frames(4)
-    once = simcity::app::read_mouse(clicked)
+    once = click(clicked)
     after_one = simcity::city::funds(simcity::app::state(once).city)
-    twice = simcity::app::read_mouse(once)
+    twice = simcity::app::take_events(once)
     after_two = simcity::city::funds(simcity::app::state(twice).city)
-    thrice = simcity::app::read_mouse(twice)
+    thrice = simcity::app::take_events(twice)
     after_three = simcity::city::funds(simcity::app::state(thrice).city)
     held_cost = after_one - after_two
     still_cost = after_two - after_three
     # One placement happened -- the tile the pointer moved onto has a road on
-    # it -- and the two further reads with the button still down cost nothing.
+    # it -- and the two further answers with the button still down cost nothing.
     held_roads = simcity::city::road_at(simcity::app::state(thrice).city, 2, 2)
     held_once = if held_roads == 1 and held_cost == 0 and still_cost == 0:
         1
@@ -138,11 +145,11 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
     looked = simcity::app::with_tool(clicked, simcity::city::Tool::Inspect)
     looking = simcity::app::show(looked)
     look_frames = frames(6)
-    game.window.id.Rwindow_inject_mouse_move(where.x + std::float64::from_int(12 * simcity::app::TILE_PX + 8), where.y + std::float64::from_int(8 * simcity::app::TILE_PX + 8))
-    aimed = frames(4)
-    game.window.id.Rwindow_inject_mouse_button(raven::window::R_MOUSE_LEFT, 1)
-    hit = frames(4)
-    read_tile = simcity::app::read_mouse(looking)
+    aimed = game.window.inject_move(where.x + std::float64::from_int(12 * simcity::app::TILE_PX + 8), where.y + std::float64::from_int(8 * simcity::app::TILE_PX + 8)):
+        on NonFiniteFloat:
+            unit
+    aimed_frames = frames(4)
+    read_tile = click(looking)
     told = frames(4)
     note = simcity::app::state(read_tile).message
     # Saving and loading, through the game's own buttons: the city is written to
@@ -181,25 +188,29 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
         1
     else:
         0
-    # The view moves: an arrow key is injected, the loop's own read_keys sees
-    # it once, and the view is one step further on. Raven reports named actions
-    # but not keys, so the view is scrolled by polling -- which is what makes
-    # this checkable at all, with an injected key standing in for a real one.
-    # A map the size the game starts on: the towns the scenarios build are 32
-    # by 32, which a 32-tile viewport exactly covers, so a scroll needs a
-    # bigger map than a scenario's.
+    # The view moves: a key goes down, the game's own event step sees the press
+    # once, and the view is one step further on. A key press is an event, so a
+    # held key is one KeyPressed and Raven's auto-repeat arrives as KeyRepeated,
+    # which the game deliberately does not act on: the view moves one step and
+    # then waits, which is what the polled mask did. A map the size the game
+    # starts on: the towns the scenarios build are 32 by 32, which a 32-tile
+    # viewport exactly covers, so a scroll needs a bigger map than a
+    # scenario's.
     wide_city = simcity::app::with_city(saved, simcity::city::make(simcity::app::MAP_WIDE, simcity::app::MAP_TALL, 7, 20000))
     before_x = simcity::app::state(wide_city).origin_x
     before_y = simcity::app::state(wide_city).origin_y
-    game.window.id.Rwindow_inject_key(raven::window::R_KEY_RIGHT, 1, 0)
-    stepped = simcity::app::read_keys(wide_city)
+    held_key = game.window.inject_key_down(raven::window::R_KEY_RIGHT, 0)
+    stepped = simcity::app::take_events(wide_city)
     after_x = simcity::app::state(stepped).origin_x
     after_y = simcity::app::state(stepped).origin_y
-    held = simcity::app::read_keys(stepped)
-    still_x = simcity::app::state(held).origin_x
-    game.window.id.Rwindow_inject_key(raven::window::R_KEY_RIGHT, 0, 0)
-    released = simcity::app::read_keys(held)
-    let_go = simcity::app::state(released).origin_x
+    # The key is still down and a frame has delivered nothing new: no step.
+    held_frame = frames(4)
+    still = simcity::app::take_events(stepped)
+    still_x = simcity::app::state(still).origin_x
+    let_go = game.window.inject_key_up(raven::window::R_KEY_RIGHT, 0)
+    released = frames(4)
+    went_up = simcity::app::take_events(still)
+    let_go_x = simcity::app::state(went_up).origin_x
     sideways = if after_x == before_x + simcity::app::VIEW_STEP_ACROSS and after_y == before_y:
         1
     else:
@@ -208,7 +219,7 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
         1
     else:
         0
-    stepped_once = if still_x == after_x and let_go == after_x:
+    stepped_once = if still_x == after_x and let_go_x == after_x:
         1
     else:
         0
@@ -226,9 +237,7 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
     # The second is the one with teeth: the palette that made the lower half of
     # the palette unreachable wanted 486 points in a 304-point row, and this
     # figure answered 0 then.
-    window_size = raven::size(game.window):
-        on NonFiniteFloat:
-            raven::Size {width: 0, height: 0}
+    window_size = raven::size(game.window)
     tools = at(game.tools)
     tools_bottom = whole(tools.y) + whole(tools.height)
     fits = if tools_bottom <= window_size.height:

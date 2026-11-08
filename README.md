@@ -9,7 +9,8 @@ from another language.
 ## What you have
 
     botlish-linux-x86_64   the supplied Botlish compiler and toolchain
-    raven-0.3.1.botpkg    the supplied Raven GUI package
+    raven-0.4.0.botpkg    the supplied Raven GUI package
+    raven-0.3.1.botpkg    the Raven package the game was first written against
     botlish.json          the project manifest (raven is its one dependency)
     .bot_modules/         raven, installed by the package manager
     simcity.bot           the entry point: the windowed game
@@ -20,27 +21,31 @@ from another language.
       scenario.bot        the six cities the tests build
       rng.bot             the deterministic randomness the game is allowed
       render.bot          the city as pixels
-      screen.bot          the raw layer: textures, and polling the mouse
+      screen.bot          the raw layer: a texture's buffer, and nothing else
       toolbar.bot         the palette of tools
       words.bot           the figures of a city, as the labels on the screen read
       app.bot             the window, the controls, and the loop that runs both
     tests.bot             the headless suite for the city (38 cases)
     labels.bot            the headless suite for the letters on the map (6 cases)
-    crossings.bot         the headless suite for one line crossing another (11 cases)
+    crossings.bot         the headless suite for one line crossing another (13 cases)
     saves.bot             saving a city to a file and reading it back (5 cases)
     gametest.bot          the windowed game, exercised with no display
+    inputtest.bot         what the pointer, the keys and the wheel do (14 cases)
     sight.bot             the map is drawn, checked on the real renderer
     bench.bot             the deterministic performance report
+    perf.bot              the input cost per frame, measured against the old code
+    guiplay.bot           the game played on a real display, and read back
     tools/                order.py, dedupe.py, undupe.py: helpers used while
                           writing the sources (a module's top level is ordered
                           callee-first, and the duplicated comments an earlier
                           reordering pass left behind are removed by undupe.py)
+    SIMCITY-RAVEN-0.4-MIGRATION-MILESTONE-1.md    the migration report
 
 ## Building and running
 
 Put the toolchain and the package in this directory, instal the package once:
 
-    ./botlish-linux-x86_64 add raven-0.3.1.botpkg
+    ./botlish-linux-x86_64 add raven-0.4.0.botpkg -replace
 
 Then build and run the game:
 
@@ -55,16 +60,23 @@ the lavapipe software renderer is enough:
 A standalone executable beside the program:
 
     ./botlish-linux-x86_64 native deploy -target linux-x86_64 -out dist
-    ./botlish-linux-x86_64 -emit-native-executable -runtime-path '$ORIGIN/lib' simcity.bot
-    mv simcity dist/
+    cp simcity.bot game.bot
+    ./botlish-linux-x86_64 -emit-native-executable -runtime-path '$ORIGIN/lib' game.bot
+    mv game dist/simcity
     ./dist/simcity
+
+The entry point is copied first because `-emit-native-executable` names the
+executable after its input's basename, and `simcity` is this program's own
+module directory: building `simcity.bot` in place asks the linker to write over
+a directory. This was true of the 0.3.1 tree as well; it is a defect of the
+documented command, not of the migration.
 
 ## Playing
 
 | what | how |
 |---|---|
 | choose a tool | click its button on the right |
-| build | click the map; drag to run a road or a line |
+| build | click the map; drag to run a road or a line -- a press is one placement, however long the button is held |
 | cross a power line over a road or a rail | lay the wire on the tile the road
   or rail already holds: the tile keeps both, and power still runs through |
 | move the view | arrow keys, or the four buttons under the map: a screen at a
@@ -81,9 +93,11 @@ A standalone executable beside the program:
 | a new town | the New town button |
 
 A new town is 64 by 64 tiles and the window shows 32 by 22 of them, so the city
-is four times the viewport and the view has to move. Arrow keys scroll it; Raven
-reports named actions but not keys, so the keys are polled each frame, which is
-the same mechanism the mouse uses. A held key scrolls once and waits, and the
+is four times the viewport and the view has to move. Arrow keys scroll it; the
+wheel scrolls it too, one step a line, which is the same step. Raven 0.4.0
+reports a watched window's keys, buttons, pointer and wheel as events, so a key
+press is one event however long the key is held and the auto-repeat Raven sends
+while it is held is not acted on: a held key scrolls once and waits, and the
 four buttons under the map do the same for a player who would rather click.
 
 Save writes the whole city -- every tile attribute, the bank, and the clock --
@@ -100,11 +114,27 @@ and nothing is served; tax to the maximum and what you built walks away.
 
     ./botlish-linux-x86_64 -backend cranelift tests.bot     # the city, 38 cases
     ./botlish-linux-x86_64 -backend cranelift labels.bot    # the map's letters, 6 cases
-    ./botlish-linux-x86_64 -backend cranelift crossings.bot # one line over another, 11 cases
+    ./botlish-linux-x86_64 -backend cranelift crossings.bot # one line over another, 13 cases
     ./botlish-linux-x86_64 -backend cranelift saves.bot     # a city to a file and back, 5 cases
     ./botlish-linux-x86_64 -backend cranelift gametest.bot  # the window, no display
+    ./botlish-linux-x86_64 -backend cranelift inputtest.bot # what input does, 14 cases
     ./botlish-linux-x86_64 -backend cranelift sight.bot     # the map, on the real renderer
     ./botlish-linux-x86_64 -backend cranelift bench.bot     # the performance report
+    ./botlish-linux-x86_64 -backend cranelift perf.bot      # the input cost per frame
+    ./botlish-linux-x86_64 -backend cranelift guiplay.bot   # the game on a display
+
+`tests.bot`, `labels.bot` and `crossings.bot` print PASS or FAIL per case and a
+count. `saves.bot` does the same, and writes a real file: it is a program rather
+than a suite, because a case that touches a file needs the store's context and a
+function that needs a context cannot be passed as a value -- which is what a
+suite's registration is. `inputtest.bot` is a program for the same reason: a
+case needs Raven's context, and it drives the game through Raven's own synthetic
+input (`inject_move`, `inject_button`, `inject_wheel`, `inject_key`) and the
+game's own event step, so what it checks is what the game runs. `perf.bot` runs
+the same workload as the `perf_old.bot` of the pre-migration tree (kept beside
+this one for the comparison) and reports the frames' cost. `guiplay.bot` needs a
+display and plays the real window, reading the city and the window's pixels
+back.
 
 `tests.bot`, `labels.bot` and `crossings.bot` print PASS or FAIL per case and a
 count. `saves.bot` does the same, and writes a real file: it is a program rather
@@ -131,3 +161,6 @@ language was like to write this in. `TOOLCHAIN-REPORT.md` is a report on the
 deficiencies of Botlish and Raven, written for whoever maintains them: each one
 is a thing that actually happened to this project, with what it cost and what
 would fix it.
+`SIMCITY-RAVEN-0.4-MIGRATION-MILESTONE-1.md` is the report of the migration to
+Raven 0.4.0: what the new package changed, what the game now does instead of
+polling, what it still does natively, and what was measured before and after.

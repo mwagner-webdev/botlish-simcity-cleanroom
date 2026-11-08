@@ -1,0 +1,645 @@
+# inputtest.bot -- the game's input interpretation, driven by Raven's own
+# synthetic input, headless.
+#
+# Raven 0.4.0 supplies `inject_move`, `inject_button`, `inject_wheel`,
+# `inject_key_down`/`inject_key_up` and `click`, and a headless Raven delivers
+# exactly what a desktop delivers. So the map's input can be tested as the game
+# plays it: a window is built, the pointer is moved, a button is pressed, a
+# frame delivers it, and the game's own event step (`simcity::app::take_events`
+# -- what the game's loop calls) answers it. No second input implementation is
+# written for this: the assertions are about the tiles the game built and the
+# money it charged, never about what an event said.
+#
+# It is a program rather than a suite (as saves.bot is, and for the same
+# reason): a case needs Raven's context, and a function that needs a context
+# cannot be passed as a value, which is what a suite's registration is. Each
+# case answers 1 for held and 0 for not, and the value is the report.
+#
+# What is checked, in order:
+#
+#   1. a press builds once, and charges once;
+#   2. a button held still builds nothing further;
+#   3. a drag builds along the tiles the pointer crossed;
+#   4. a drag Raven coalesced into one event crosses every tile, right and down;
+#   5. the same drag the other way, left and up;
+#   6. a release ends the drag;
+#   7. a click outside the map builds nothing;
+#   8. a click on a control builds nothing, and the control keeps its own input;
+#   9. distinct x and y coordinates pick the tile they name;
+#  10. the window's edge is the map's edge, and builds the edge tile;
+#  11. the arrow keys move the view once per press;
+#  12. the wheel moves the view and nothing else;
+#  13. a scrolled view builds where the pointer is, not where it was;
+#  14. the map's last visible column is built, and nothing past it.
+import raven
+import raven::window
+import std::ffi::c
+import std::float64
+import std::int
+import std::list
+import std::str
+import simcity::app
+import simcity::city
+import simcity::screen
+import simcity::store
+
+with context raven::create()
+with context simcity::screen::create()
+with context simcity::store::create()
+
+# One game laid out: the window, its map, and the map's rectangle as the last
+# frame put it. The clock is stopped, so the treasury moves only when the
+# player spends -- every figure below is a construction figure.
+struct Table:
+    game: simcity::app::Game
+    map: raven::Rect
+
+# Draws TIMES frames and answers how many were drawn.
+nomethod fn frames(times: int) -> int:
+    fold i from 0 to times with intermediate drawn 0:
+        more = raven::draw_frame()
+        if more:
+            drawn + 1
+        else:
+            drawn
+
+# A fresh game: a headless Raven, the game's own window, laid out, paused.
+nomethod fn ready() -> Table errors raven::RavenFailed, NonFiniteFloat:
+    started = raven::start(raven::headless())
+    town = simcity::city::make(simcity::app::MAP_WIDE, simcity::app::MAP_TALL, 4242, 20000)
+    game = simcity::app::build(town)
+    laid = frames(6)
+    paused = simcity::app::with_speed(game, simcity::app::Speed::Paused)
+    shown = simcity::app::show(paused)
+    more = frames(6)
+    Table {game: shown, map: raven::rect(shown.map)}
+
+# Stops Raven: every window, widget and timer is destroyed and every event not
+# taken is forgotten, so the next case begins from nothing.
+nomethod fn done() -> unit:
+    raven::stop()
+
+# The city the game holds, and what it holds.
+nomethod fn the_city(set: Table) -> simcity::city::City:
+    simcity::app::state(set.game).city
+
+nomethod fn money(set: Table) -> int:
+    simcity::city::funds(the_city(set))
+
+# Every road tile in the city.
+nomethod fn road_count(city: simcity::city::City) -> int:
+    fold row from 0 to city.height with intermediate made 0:
+        fold col from 0 to city.width with intermediate u made:
+            u + simcity::city::road_at(city, col, row)
+
+nomethod fn roads(set: Table) -> int:
+    road_count(the_city(set))
+
+# The tool the game holds.
+nomethod fn picked(set: Table, tool: simcity::city::Tool) -> Table:
+    chosen = simcity::app::with_tool(set.game, tool)
+    shown = simcity::app::show(chosen)
+    Table {game: shown, map: set.map}
+
+# --- The pointer ------------------------------------------------------------
+
+# The window point at the middle of the view tile (COL, ROW).
+nomethod fn pixel(col: int, row: int) -> simcity::app::Place:
+    simcity::app::place_of(col * simcity::app::TILE_PX + 8, row * simcity::app::TILE_PX + 8)
+
+# The pointer moves to the window point (PX, PY) -- anywhere in the window,
+# including outside the map -- a frame delivers it, and the game answers.
+nomethod fn aim_at(set: Table, px: int, py: int) -> Table errors NonFiniteFloat:
+    set.game.window.inject_move(set.map.x + std::float64::from_int(px), set.map.y + std::float64::from_int(py))
+    moved = frames(4)
+    Table {game: simcity::app::take_events(set.game), map: set.map}
+
+# The pointer moves to the middle of the view tile (COL, ROW).
+nomethod fn aim(set: Table, col: int, row: int) -> Table errors NonFiniteFloat:
+    at = pixel(col, row)
+    aim_at(set, at.x, at.y)
+
+# The left button goes down where the pointer is, a frame delivers the press,
+# and the game answers it.
+nomethod fn press(set: Table) -> Table:
+    down = set.game.window.inject_button(raven::window::R_MOUSE_LEFT, true)
+    delivered = frames(4)
+    Table {game: simcity::app::take_events(set.game), map: set.map}
+
+# The game's own event step, as a table: what the game's loop calls after a
+# frame, so a test can answer the events without drawing another one.
+nomethod fn answered(set: Table) -> Table:
+    Table {game: simcity::app::take_events(set.game), map: set.map}
+
+# The left button comes up.
+nomethod fn let_go(set: Table) -> Table:
+    up = set.game.window.inject_button(raven::window::R_MOUSE_LEFT, false)
+    delivered = frames(4)
+    Table {game: simcity::app::take_events(set.game), map: set.map}
+
+# The pointer is moved through each of PLACES in turn and ONE frame is drawn
+# after all of them: Raven coalesces the moves of one frame into a single
+# MouseMoved, so this is what a pointer that moved faster than the frames
+# arrived looks like.
+nomethod fn swept(set: Table, places: List[simcity::app::Place]) -> Table errors NonFiniteFloat:
+    loop stop in places:
+        aim = set.game.window.inject_move(set.map.x + std::float64::from_int(stop.x), set.map.y + std::float64::from_int(stop.y)):
+            on NonFiniteFloat:
+                unit
+    moved = frames(4)
+    Table {game: simcity::app::take_events(set.game), map: set.map}
+
+# The wheel turns DX, DY lines where the pointer is.
+nomethod fn turn(set: Table, dx: int, dy: int) -> Table errors NonFiniteFloat:
+    swept_wheel = set.game.window.inject_wheel(std::float64::from_int(dx), std::float64::from_int(dy)):
+        on NonFiniteFloat:
+            unit
+    moved = frames(4)
+    Table {game: simcity::app::take_events(set.game), map: set.map}
+
+# A key is pressed and released.
+nomethod fn key_tap(set: Table, key: std::ffi::c::UInt) -> Table:
+    tapped = set.game.window.inject_key(key, 0)
+    moved = frames(4)
+    Table {game: simcity::app::take_events(set.game), map: set.map}
+
+# A key goes down and stays down.
+nomethod fn key_held(set: Table, key: std::ffi::c::UInt) -> Table:
+    held = set.game.window.inject_key_down(key, 0)
+    moved = frames(4)
+    Table {game: simcity::app::take_events(set.game), map: set.map}
+
+nomethod fn key_free(set: Table, key: std::ffi::c::UInt) -> Table:
+    freed = set.game.window.inject_key_up(key, 0)
+    moved = frames(4)
+    Table {game: simcity::app::take_events(set.game), map: set.map}
+
+# --- Ground a road can be laid on -------------------------------------------
+
+# WHETHER the tile (COL, ROW) of the view takes a road: not water.
+nomethod fn dry?(city: simcity::city::City, col: int, row: int) -> bool:
+    simcity::city::terrain(city, col, row) != simcity::city::WATER
+
+# The first tile of the viewport that takes a road, or none. The map is the
+# same every run, so the scan is the same every run.
+nomethod fn dry_spot(city: simcity::city::City, origin_x: int, origin_y: int, row: int, col: int) -> simcity::app::Place:
+    if row >= simcity::app::DOWN:
+        simcity::app::place_of(-1, -1)
+    elif col >= simcity::app::ACROSS:
+        dry_spot(city, origin_x, origin_y, row + 1, 0)
+    elif dry?(city, origin_x + col, origin_y + row):
+        simcity::app::place_of(col, row)
+    else:
+        dry_spot(city, origin_x, origin_y, row, col + 1)
+
+# The last tile of the viewport that takes a road, or none: the view's own last
+# row and column, scanned backwards, so a test can press on the map's edge.
+nomethod fn last_dry(city: simcity::city::City, origin_x: int, origin_y: int, row: int, col: int) -> simcity::app::Place:
+    if row < 0:
+        simcity::app::place_of(-1, -1)
+    elif col < 0:
+        last_dry(city, origin_x, origin_y, row - 1, simcity::app::ACROSS - 1)
+    elif dry?(city, origin_x + col, origin_y + row):
+        simcity::app::place_of(col, row)
+    else:
+        last_dry(city, origin_x, origin_y, row, col - 1)
+
+# --- The line a coalesced drag must have crossed ----------------------------
+#
+# The expectation is computed a second way -- rounding a Float64 rather than
+# dividing an Int -- so it is not the implementation reading itself. The two
+# agree everywhere except at an exact half, which is why the drags below are
+# chosen so that no step is one: no ratio of the two distances is a half.
+
+nomethod fn line_tile(from_x: int, from_y: int, to_x: int, to_y: int, count: int, i: int) -> simcity::app::Place errors NonFiniteFloat:
+    dx = i * (to_x - from_x)
+    dy = i * (to_y - from_y)
+    step_x = if dx >= 0:
+        std::float64::round(std::float64::from_int(dx) / std::float64::from_int(count))
+    else:
+        -std::float64::round(std::float64::from_int(-dx) / std::float64::from_int(count))
+    step_y = if dy >= 0:
+        std::float64::round(std::float64::from_int(dy) / std::float64::from_int(count))
+    else:
+        -std::float64::round(std::float64::from_int(-dy) / std::float64::from_int(count))
+    simcity::app::place_of(from_x + step_x, from_y + step_y)
+
+# WHETHER every tile of the line from (from_x, from_y) to (to_x, to_y) holds a
+# road: the tiles a coalesced move must have crossed, one by one.
+nomethod fn line_laid?(city: simcity::city::City, from_x: int, from_y: int, to_x: int, to_y: int, count: int, i: int) -> bool errors NonFiniteFloat:
+    if i > count:
+        true
+    else:
+        at = line_tile(from_x, from_y, to_x, to_y, count, i)
+        here = simcity::city::road_at(city, at.x, at.y) != 0
+        rest = line_laid?(city, from_x, from_y, to_x, to_y, count, i + 1)
+        here and rest
+
+nomethod fn wide_of(from_x: int, to_x: int) -> int:
+    far = to_x - from_x
+    if far < 0:
+        -far
+    else:
+        far
+
+nomethod fn tall_of(from_y: int, to_y: int) -> int:
+    far = to_y - from_y
+    if far < 0:
+        -far
+    else:
+        far
+
+nomethod fn steps_of(from_x: int, from_y: int, to_x: int, to_y: int) -> int:
+    across = wide_of(from_x, to_x)
+    down = tall_of(from_y, to_y)
+    if across > down:
+        across
+    else:
+        down
+
+# --- The cases --------------------------------------------------------------
+
+# 1. A press is one construction action: one road, and exactly what a road
+# costs.
+nomethod fn a_press_builds_once() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    at = dry_spot(the_city(set), 0, 0, 0, 0)
+    aimed = aim(set, at.x, at.y)
+    before = money(aimed)
+    made = roads(aimed)
+    pressed = press(aimed)
+    after = money(pressed)
+    built = roads(pressed)
+    cost = simcity::city::cost_of(simcity::city::Tool::Road)
+    done()
+    if built == made + 1 and after == before - cost:
+        1
+    else:
+        0
+
+# 2. A button held over the tile it just built is not a second placement: the
+# frames deliver nothing further, so nothing is charged and nothing is built.
+nomethod fn a_held_button_builds_once() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    at = dry_spot(the_city(set), 0, 0, 0, 0)
+    aimed = aim(set, at.x, at.y)
+    pressed = press(aimed)
+    after_one = money(pressed)
+    roads_one = roads(pressed)
+    still = answered(pressed)
+    again = frames(4)
+    still2 = answered(still)
+    later = frames(4)
+    still3 = answered(still2)
+    after_two = money(still3)
+    roads_two = roads(still3)
+    done()
+    if after_two == after_one and roads_two == roads_one:
+        1
+    else:
+        0
+
+# 3. A drag builds along the tiles the pointer crossed, and charges for each
+# one: two moves over sixteen tiles are sixteen roads.
+nomethod fn a_drag_builds_along_the_line() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    at = dry_spot(the_city(set), 0, 0, 0, 0)
+    aimed = aim(set, at.x, at.y)
+    pressed = press(aimed)
+    mid = aim(pressed, at.x + 7, at.y)
+    end = aim(mid, at.x + 15, at.y)
+    built = roads(end)
+    charged = money(end)
+    cost = simcity::city::cost_of(simcity::city::Tool::Road)
+    done()
+    if built == 16 and charged == 20000 - 16 * cost:
+        1
+    else:
+        0
+
+# 4. A drag Raven coalesced into one event crosses every tile it passed over:
+# three moves, one frame, and the whole line from the press to the last move is
+# laid -- not only the tile the pointer stopped on.
+nomethod fn a_coalesced_drag_skips_no_tile() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    aimed = aim(set, 2, 7)
+    pressed = press(aimed)
+    one = pixel(4, 8)
+    two = pixel(8, 10)
+    three = pixel(15, 14)
+    swept_drag = swept(pressed, [one, two, three])
+    steps = steps_of(2, 7, 15, 14)
+    laid = line_laid?(the_city(swept_drag), 2, 7, 15, 14, steps, 1)
+    built = roads(swept_drag)
+    charged = money(swept_drag)
+    cost = simcity::city::cost_of(simcity::city::Tool::Road)
+    done()
+    if laid and built == steps + 1 and charged == 20000 - (steps + 1) * cost:
+        1
+    else:
+        0
+
+# 5. The same coalesced drag the other way: left and up, where the rounding of
+# the expectation is the other sign too.
+nomethod fn a_coalesced_drag_the_other_way_skips_no_tile() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    aimed = aim(set, 18, 7)
+    pressed = press(aimed)
+    one = pixel(16, 8)
+    two = pixel(12, 10)
+    three = pixel(4, 15)
+    swept_drag = swept(pressed, [one, two, three])
+    steps = steps_of(18, 7, 4, 15)
+    laid = line_laid?(the_city(swept_drag), 18, 7, 4, 15, steps, 1)
+    built = roads(swept_drag)
+    charged = money(swept_drag)
+    cost = simcity::city::cost_of(simcity::city::Tool::Road)
+    done()
+    if laid and built == steps + 1 and charged == 20000 - (steps + 1) * cost:
+        1
+    else:
+        0
+
+# 6. A release ends the drag: the tiles built before it stay, and the pointer
+# that moves after it builds nothing until it is pressed on the map again.
+nomethod fn a_release_ends_the_drag() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    at = dry_spot(the_city(set), 0, 0, 0, 0)
+    aimed = aim(set, at.x, at.y)
+    pressed = press(aimed)
+    dragged = aim(pressed, at.x + 5, at.y)
+    released = let_go(dragged)
+    after_press = simcity::app::state(dragged.game).city
+    roads_at_release = simcity::city::road_at(after_press, at.x + 5, at.y)
+    moved = aim(released, at.x + 11, at.y)
+    built = roads(moved)
+    charged = money(moved)
+    cost = simcity::city::cost_of(simcity::city::Tool::Road)
+    done()
+    if roads_at_release == 1 and built == 6 and charged == 20000 - 6 * cost:
+        1
+    else:
+        0
+
+# 7. A click outside the map builds nothing: the label row above it, the row
+# of controls below it, and the palette beside it are not the map, and the
+# pointer over them is no tile.
+nomethod fn a_click_off_the_map_builds_nothing() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    before = money(set)
+    above = aim_at(set, 8, 8)
+    pressed_above = press(above)
+    right = aim_at(set, 600, 200)
+    pressed_right = press(right)
+    below = aim_at(set, 8, 400)
+    pressed_below = press(below)
+    built = roads(pressed_below)
+    charged = money(pressed_below)
+    done()
+    if built == 0 and charged == before:
+        1
+    else:
+        0
+
+# 8. A click on a control builds nothing on the map -- and the control still
+# takes its own input, because watching the window consumes nothing: the field
+# is typed into, and the text it holds is the text that was typed.
+nomethod fn a_click_on_a_control_builds_nothing() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    before = money(set)
+    field_clicked = set.game.window.click(set.game.path):
+        on NonFiniteFloat:
+            unit
+    clicked = frames(4)
+    taken = answered(set)
+    typed = set.game.window.inject_text("other.sav")
+    typing = frames(4)
+    typed_up = answered(taken)
+    field = raven::input_text(typed_up.game.path)
+    box_clicked = typed_up.game.window.click(typed_up.game.tax):
+        on NonFiniteFloat:
+            unit
+    boxing = frames(4)
+    boxed = answered(typed_up)
+    built = roads(boxed)
+    charged = money(boxed)
+    done()
+    if built == 0 and charged == before and field != simcity::app::SAVE_PATH:
+        1
+    else:
+        0
+
+# 9. Distinct x and y coordinates pick the tile they name: three presses at
+# three places, each with its own x and its own y, land on three different
+# tiles -- and the pair is never read as one coordinate of the other, which is
+# what the native out-parameters the game used to poll could do.
+nomethod fn distinct_x_and_y_pick_the_tile() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    aimed = aim(set, 3, 7)
+    first = press(aimed)
+    freed = let_go(first)
+    aimed2 = aim(freed, 20, 5)
+    second = press(aimed2)
+    freed2 = let_go(second)
+    aimed3 = aim(freed2, 9, 3)
+    third = press(aimed3)
+    city = the_city(third)
+    built = roads(third)
+    charged = money(third)
+    cost = simcity::city::cost_of(simcity::city::Tool::Road)
+    one = simcity::city::road_at(city, 3, 7)
+    two = simcity::city::road_at(city, 20, 5)
+    three_roads = simcity::city::road_at(city, 9, 3)
+    other = simcity::city::road_at(city, 3, 5)
+    done()
+    if one == 1 and two == 1 and three_roads == 1 and other == 0 and built == 3 and charged == 20000 - 3 * cost:
+        1
+    else:
+        0
+
+# 10. The window's edge is the map's edge: the map begins at the window's left
+# edge, so a press at the first pixel of the window builds the view's first
+# tile, and one pixel past the map's own last column builds nothing.
+nomethod fn the_window_edge_is_the_map_edge() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    before = money(set)
+    edge = aim_at(set, 1, 1)
+    pressed = press(edge)
+    city = the_city(pressed)
+    built = roads(pressed)
+    charged = money(pressed)
+    cost = simcity::city::cost_of(simcity::city::Tool::Road)
+    corner = simcity::city::road_at(city, 0, 0)
+    outside = aim_at(pressed, 513, 100)
+    past = press(outside)
+    built_past = roads(past)
+    done()
+    if corner == 1 and built == 1 and charged == before - cost and built_past == 1:
+        1
+    else:
+        0
+
+# 11. The arrow keys move the view one step per press, and a held key moves it
+# once: a key press is an event, so Raven's own auto-repeat (KeyRepeated) is
+# not acted on. An unbound key does nothing.
+nomethod fn the_arrow_keys_move_the_view_once() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = ready()
+    start = simcity::app::state(set.game)
+    # The key goes down: one press, one step.
+    held = key_held(set, raven::window::R_KEY_RIGHT)
+    after_held = simcity::app::state(held.game)
+    # It stays down and frames go by: no new event, so no second step.
+    waiting = frames(4)
+    still = answered(held)
+    after_still = simcity::app::state(still.game)
+    # It comes up: the release is not a step either.
+    freed = key_free(still, raven::window::R_KEY_RIGHT)
+    after_freed = simcity::app::state(freed.game)
+    # Pressed again, it steps again -- and stops at the map's edge.
+    again = key_tap(freed, raven::window::R_KEY_RIGHT)
+    after_again = simcity::app::state(again.game)
+    left = key_tap(again, raven::window::R_KEY_LEFT)
+    after_left = simcity::app::state(left.game)
+    left2 = key_tap(left, raven::window::R_KEY_LEFT)
+    after_left2 = simcity::app::state(left2.game)
+    down = key_tap(left2, raven::window::R_KEY_DOWN)
+    after_down = simcity::app::state(down.game)
+    down2 = key_tap(down, raven::window::R_KEY_DOWN)
+    after_down2 = simcity::app::state(down2.game)
+    up = key_tap(down2, raven::window::R_KEY_UP)
+    after_up = simcity::app::state(up.game)
+    other = key_tap(up, raven::window::R_KEY_A)
+    after_other = simcity::app::state(other.game)
+    done()
+    if after_held.origin_x == start.origin_x + simcity::app::VIEW_STEP_ACROSS and after_still.origin_x == after_held.origin_x and after_freed.origin_x == after_held.origin_x and after_again.origin_x == simcity::app::MAP_WIDE - simcity::app::ACROSS and after_left.origin_x == simcity::app::MAP_WIDE - simcity::app::ACROSS - simcity::app::VIEW_STEP_ACROSS and after_left2.origin_x == 0 and after_down.origin_y == simcity::app::VIEW_STEP_DOWN and after_down2.origin_y == 2 * simcity::app::VIEW_STEP_DOWN and after_up.origin_y == simcity::app::VIEW_STEP_DOWN and after_other.origin_x == 0 and after_other.origin_y == simcity::app::VIEW_STEP_DOWN:
+        1
+    else:
+        0
+
+# 12. The wheel moves the view and nothing else: one step a line, the same
+# step the keys move it by, and no construction even with a tool picked and
+# the pointer on the map. The game has no zoom, so nothing else moves.
+nomethod fn the_wheel_moves_only_the_view() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    at = dry_spot(the_city(set), 0, 0, 0, 0)
+    aimed = aim(set, at.x, at.y)
+    start = simcity::app::state(aimed.game)
+    down = key_tap(aimed, raven::window::R_KEY_DOWN)
+    after_down = simcity::app::state(down.game)
+    scrolled_up = turn(down, 0, 1)
+    after_up = simcity::app::state(scrolled_up.game)
+    scrolled_down = turn(scrolled_up, 0, -1)
+    after_down2 = simcity::app::state(scrolled_down.game)
+    scrolled_right = key_tap(scrolled_down, raven::window::R_KEY_RIGHT)
+    wheel_left = turn(scrolled_right, 1, 0)
+    after_left = simcity::app::state(wheel_left.game)
+    wheel_right = turn(wheel_left, -1, 0)
+    after_right = simcity::app::state(wheel_right.game)
+    built = roads(wheel_right)
+    charged = money(wheel_right)
+    tool_now = simcity::app::state(wheel_right.game).tool
+    done()
+    if after_down.origin_y == simcity::app::VIEW_STEP_DOWN and after_up.origin_y == 0 and after_down2.origin_y == simcity::app::VIEW_STEP_DOWN and after_left.origin_x == 0 and after_right.origin_x == simcity::app::VIEW_STEP_ACROSS and built == 0 and charged == 20000 and tool_now == simcity::city::Tool::Road:
+        1
+    else:
+        0
+
+# 13. A scrolled view builds where the pointer is, not where the view began:
+# the view is moved a screen across and down, a press lands on the tile the
+# moved view shows at the pointer, and the tile at the same view position
+# before the move is untouched.
+nomethod fn a_scrolled_view_builds_where_the_pointer_is() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    moved = key_tap(key_tap(set, raven::window::R_KEY_RIGHT), raven::window::R_KEY_DOWN)
+    view = simcity::app::state(moved.game)
+    at = dry_spot(the_city(moved), view.origin_x, view.origin_y, 0, 0)
+    aimed = aim(moved, at.x, at.y)
+    pressed = press(aimed)
+    city = the_city(pressed)
+    built = roads(pressed)
+    charged = money(pressed)
+    cost = simcity::city::cost_of(simcity::city::Tool::Road)
+    here = simcity::city::road_at(city, view.origin_x + at.x, view.origin_y + at.y)
+    there = simcity::city::road_at(city, at.x, at.y)
+    done()
+    if here == 1 and built == 1 and charged == 20000 - cost and view.origin_x > 0 and view.origin_y > 0:
+        1
+    else:
+        0
+
+# 14. The map's last visible column is built, and nothing past it: a press on
+# the view's last column puts a road on that column, and a press one tile past
+# the map's own edge -- which the view cannot show -- puts none.
+nomethod fn the_map_edge_builds_the_last_column() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    at = last_dry(the_city(set), 0, 0, simcity::app::DOWN - 1, simcity::app::ACROSS - 1)
+    before = money(set)
+    aimed = aim(set, at.x, at.y)
+    pressed = press(aimed)
+    city = the_city(pressed)
+    built = roads(pressed)
+    charged = money(pressed)
+    cost = simcity::city::cost_of(simcity::city::Tool::Road)
+    edge = simcity::city::road_at(city, at.x, at.y)
+    outside = aim_at(pressed, simcity::app::ACROSS * simcity::app::TILE_PX + 8, at.y * simcity::app::TILE_PX + 8)
+    past = press(outside)
+    built_past = roads(past)
+    charged_past = money(past)
+    done()
+    if edge == 1 and built == 1 and charged == before - cost and built_past == 1 and charged_past == charged:
+        1
+    else:
+        0
+
+# --- The report -------------------------------------------------------------
+
+nomethod fn verdict(name: str, held: int) -> str:
+    if held == 1:
+        "PASS ".concat(name)
+    else:
+        "FAIL ".concat(name)
+
+# WHETHER the line is a pass.
+nomethod fn passed(line: str) -> bool:
+    head = line.substring(0, 4):
+        on UpperOverrun:
+            "FAIL"
+    head == "PASS"
+
+nomethod fn count_passed(lines: List[str], i: int, good: int) -> int:
+    if i >= std::list::length(lines):
+        good
+    elif passed(lines.get(i, "")):
+        count_passed(lines, i + 1, good + 1)
+    else:
+        count_passed(lines, i + 1, good)
+
+nomethod fn summary(lines: List[str]) -> str:
+    good = count_passed(lines, 0, 0)
+    std::int::to_string(good).concat(" passed, ").concat(std::int::to_string(std::list::length(lines) - good)).concat(" failed")
+
+fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
+    one = a_press_builds_once()
+    two = a_held_button_builds_once()
+    three = a_drag_builds_along_the_line()
+    four = a_coalesced_drag_skips_no_tile()
+    five = a_coalesced_drag_the_other_way_skips_no_tile()
+    six = a_release_ends_the_drag()
+    seven = a_click_off_the_map_builds_nothing()
+    eight = a_click_on_a_control_builds_nothing()
+    nine = distinct_x_and_y_pick_the_tile()
+    ten = the_window_edge_is_the_map_edge()
+    eleven = the_arrow_keys_move_the_view_once()
+    twelve = the_wheel_moves_only_the_view()
+    thirteen = a_scrolled_view_builds_where_the_pointer_is()
+    fourteen = the_map_edge_builds_the_last_column()
+    report = [verdict("a press builds once, and charges once", one), verdict("a button held still builds once", two), verdict("a drag builds along the tiles it crossed", three), verdict("a coalesced drag skips no tile", four), verdict("a coalesced drag the other way skips no tile", five), verdict("a release ends the drag", six), verdict("a click off the map builds nothing", seven), verdict("a click on a control builds nothing, and the control keeps its input", eight), verdict("distinct x and y pick the tile they name", nine), verdict("the window's edge is the map's edge", ten), verdict("the arrow keys move the view once per press", eleven), verdict("the wheel moves the view and nothing else", twelve), verdict("a scrolled view builds where the pointer is", thirteen), verdict("the map's last visible column is built", fourteen)]
+    counted = report.append(summary(report))
+    counted
+
+result = main():
+    on raven::RavenFailed failure:
+        ["Raven did not start", failure.detail]
+    on NonFiniteFloat:
+        ["a figure Raven reported is not a number"]
+result

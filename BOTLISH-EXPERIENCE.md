@@ -293,3 +293,108 @@ system cannot see, and the bug in section 7 was exactly a well-typed call.
   way up; the crossing drawing's stripe was at first not gated on the wire
   running that way at all. None was visible in a headless figure, and each was
   visible the moment a case counted the pixels |
+
+---
+
+# Follow-up: the Raven 0.4.0 migration
+
+Written after the migration to Raven 0.4.0, as an addition rather than a
+rewrite: the report above is what the language was like the first time, and it
+stays as it was. This section says which of its findings the new package
+answered, which were the documentation's fault, which remain, and which were
+mine.
+
+## What Raven 0.4.0 resolved
+
+* **The worst defect of the session cannot happen through the new API.** The
+  bug in section 7 was `Rwindow_get_mouse_position(window.id, cell.xy,
+  cell.xy)`: two out-parameters given one address. `raven::mouse_position`
+  answers a `raven::Point`, out of Raven's own scratch memory, and an event's
+  `x` and `y` are two fields of one record. There is no call left in the game
+  that could couple them. Section 9's third wish -- a way to say in a type that
+  two C pointers are not one -- is answered by not having the pointers.
+* **The press that had to be derived is now an event.** Section 7's second
+  defect and the one playtest defect in section 11 both came from a button whose
+  *state* was the only thing Raven reported: the game had to compare frames, and
+  holding the button drained the treasury at $10 a frame until the derivation
+  was right. `MousePressed` arrives once per press however long the button is
+  held, so the construction code no longer derives anything, and a held button
+  spends nothing because nothing is delivered.
+* **The keys no longer have to be polled.** Four `Rwindow_is_key_down` calls a
+  frame, and a mask of bits carried in the game's state to tell a press from a
+  hold, are replaced by `KeyPressed` -- and by ignoring `KeyRepeated`, which is
+  exactly the behaviour the mask implemented.
+* **The native-memory census of the raw layer shrank from five allocations to
+  three.** `simcity/screen` held a frame buffer and four C floats (two for the
+  mouse, two for a widget's desired size). The mouse's two are gone: the
+  package answers the position and the button. What is left is the texture
+  buffer and the two floats for a widget's desired size, which the package still
+  does not wrap. The `Screen` context stays, with that narrower responsibility.
+* **`NonFiniteFloat` declarations disappeared from the paths Raven now
+  guarantees.** `events()`, `rect()` and `mouse_position()` no longer declare
+  it, because the package keeps the numbers it hands out finite. The handlers
+  that used to clamp a rect to zeros, or a pointer to (0, 0), are gone; the ones
+  that remain are for operations that genuinely can fail (a texture upload, a
+  spin box's value, a Float64 subtraction).
+
+## What was the documentation's fault, not the language's
+
+Section 4's list of things the standard library does not have was written
+against stale Compilerpedia entries, and the repository investigation since
+corrected four of them:
+
+* **File I/O** is `std::io::fs` with a platform context (`std::linux::fs`), and
+  the game's own `simcity::store` was written before that was documented. It
+  works, it is tested, and rewriting it was not part of this migration: it is
+  recorded as a simplification that is available, not one that was made.
+* **`Usize.value`** exists, and `saves.bot`'s comment about a context that
+  cannot be passed as a value is still true -- that part is a real rule -- but
+  the conversion it reached around is available.
+* **`on Low: fail Mine`** at a handler boundary exists; nothing in the game
+  needed it in the end.
+* **Integer parsing** is `std::int::from_string`; again, not needed by the game.
+
+Two entries in the report were wrong in a way that cost time rather than code:
+the frame loop is a `wait_frame` recursion the native backends run as a loop
+(that was already true), and Raven's own event bridge was always an ordinary C
+callback the package records -- the game did not need, and does not now need,
+retained Botlish callbacks of its own.
+
+## What remains a real limitation
+
+Unchanged from the report above, and still worked around rather than fixed:
+
+* **No integer division.** `simcity::render::div` is thirty-two restoring
+  steps, and the migration uses it for the tile conversion and for the line a
+  drag walks. It is load-bearing, not cosmetic.
+* **No struct-update expression.** The `State` literals are still eleven copies
+  of the same shape; the migration added a `drag` field and paid for it in all
+  of them again.
+* **No mutual recursion, and a semantic-instance budget** of sixteen typed
+  predicates per callee. The input suite is a program rather than a suite for
+  the same reason `saves.bot` is: a case needs Raven's context, and a function
+  that needs a context cannot be passed as a value. That is the documented rule,
+  and it is a better reason than splitting a module to dodge a budget.
+* **No string split, trim or search.** The save format is fixed-width decimal
+  fields precisely so that none is needed.
+* **General struct rendering in failing `std::test` comparisons.** Unchanged:
+  a case still reports one named figure rather than a struct.
+* **The context requirement in function types.** Same as above: the input
+  suite's cases are called directly, not registered.
+
+## What was my own misunderstanding
+
+* I wrote in section 4 that Raven's generated binding was the only way to read
+  input, and built four native calls to prove it. The binding did hold
+  `Rwindow_inject_mouse_move` and `Rwindow_get_modifiers` all along -- what was
+  missing was the *wrapper* and the event bridge, which is exactly what 0.4.0
+  supplies. The gap was the package's, but my conclusion ("nothing watches the
+  map") was read off the wrapper's surface rather than the package's.
+* The game polled the mouse once a frame and derived a press, and I described
+  that as "what a game does anyway". It is what a game does when the library
+  cannot say what happened. The migration's loop now asks for frames, answers
+  the events, runs the clock and draws -- and does not poll anything.
+* Section 6's frame loop note about a loop's bounds being exclusive is still
+  correct, and the migration leans on it harder than before: the line a
+  coalesced drag walks is `loop i from 1 to count + 1`, which is what makes it
+  visit every tile rather than the first `count - 1` of them.
