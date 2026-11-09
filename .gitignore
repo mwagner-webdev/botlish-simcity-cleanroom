@@ -4,3 +4,6 @@ __pycache__/
 dist/
 *.log
 sight.log
+botlish-linux-x86_64
+*.botpkg
+*.provenance.json
