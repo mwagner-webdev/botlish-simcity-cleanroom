@@ -18,7 +18,14 @@
 # A colour is a packed integer, red in the high byte and blue in the low,
 # because a module-level binding may not construct a struct -- a constant in
 # Botlish is a number or a string, never a value of its own making.
-
+#
+# The three networks are told apart by colour *and* by the way they are drawn:
+# a road is asphalt with a pale line down its middle, a rail is brown with
+# sleepers, and a power line is a line of its own rather than a filled tile.
+# The first cut of the game drew all three as a flat tile of nearly the same
+# grey, which is a map you read by clicking on things to find out what they
+# are. A line's direction is decided from its neighbours, so a run of road
+# reads as a road from one end of it to the other.
 import std::byte
 
 import std::float64
@@ -26,6 +33,8 @@ import std::float64
 import std::list
 
 import type simcity::city::Tool
+
+import simcity::actions
 
 import simcity::city
 
@@ -42,6 +51,10 @@ LABEL_AT = 1
 CROSS_AT = 3
 
 CROSS_WIDE = 2
+
+# How many tiles a block of the map is, for the faint grid that gives the map
+# a scale: a tile is eight pixels, so four of them are a square of thirty-two.
+BLOCK = 4
 
 #
 # A number per letter, so the glyph table is a list of lists rather than a
@@ -131,21 +144,31 @@ nomethod fn glyph_on(letter: int, row: int, col: int) -> bool:
 # Every colour here is made up for this game. The greens and greys of the
 # ground, the blue of the roads, the yellow of the wires: the map reads by hue,
 # so a developed tile, a plant and a bare tile are not the same on screen.
-WATER_INK = 38 * 65536 + 74 * 256 + 128
+# The three networks are three different values of the same three numbers --
+# a road asphalt, a rail wood-brown, a wire brass -- so the hue says which one
+# it is before the shape does.
+WATER_INK = 40 * 65536 + 86 * 256 + 146
 
-GRASS_INK = 72 * 65536 + 122 * 256 + 66
+GRASS_INK = 76 * 65536 + 126 * 256 + 70
 
-TREES_INK = 44 * 65536 + 90 * 256 + 48
+TREES_INK = 44 * 65536 + 92 * 256 + 52
 
-ROUGH_INK = 120 * 65536 + 112 * 256 + 80
+ROUGH_INK = 122 * 65536 + 114 * 256 + 82
 
-ROAD_INK = 84 * 65536 + 84 * 256 + 88
+# A road: asphalt, with the pale line the carriageway is marked with.
+ROAD_INK = 66 * 65536 + 70 * 256 + 80
 
-WIRE_INK = 96 * 65536 + 92 * 256 + 88
+ROAD_LINE = 128 * 65536 + 132 * 256 + 142
 
-WIRE_LIVE = 232 * 65536 + 196 * 256 + 60
+# A rail: wood-brown, with its sleepers.
+RAIL_INK = 108 * 65536 + 92 * 256 + 74
 
-RAIL_INK = 110 * 65536 + 98 * 256 + 82
+RAIL_TIE = 74 * 65536 + 62 * 256 + 52
+
+# A power line: brass while it is dead, and bright yellow once it is live.
+WIRE_INK = 138 * 65536 + 122 * 256 + 84
+
+WIRE_LIVE = 236 * 65536 + 198 * 256 + 62
 
 ZONE_RES_INK = 126 * 65536 + 190 * 256 + 116
 
@@ -165,7 +188,21 @@ FIRE_INK = 202 * 65536 + 100 * 256 + 88
 
 PARK_INK = 96 * 65536 + 186 * 256 + 96
 
-CURSOR_INK = 244 * 65536 + 240 * 256 + 214
+# The tile under the pointer: a one-pixel frame in the colour of what a
+# placement there would answer, so the player sees whether it will work before
+# committing to it. The four inks are the same four the palette and the note
+# line use.
+CURSOR_OK = 120 * 65536 + 224 * 256 + 134
+
+CURSOR_POOR = 244 * 65536 + 200 * 256 + 78
+
+CURSOR_NO = 232 * 65536 + 96 * 256 + 96
+
+CURSOR_LOOK = 244 * 65536 + 244 * 256 + 244
+
+# The frame of a tile the view cannot show: no tool answers for ground that is
+# not on the map, so it is the one answer with nothing behind it.
+CURSOR_OFF = 132 * 65536 + 136 * 256 + 148
 
 LABEL_INK = 24 * 65536 + 28 * 256 + 40
 
@@ -247,9 +284,12 @@ nomethod fn green(ink: int) -> std::byte::Byte errors std::byte::AboveRange, std
 nomethod fn pixel(ink: int) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
     [red(ink), green(ink), blue(ink), std::byte::from_int(255)]
 
-# A colour with each channel halved: a tile that should be lit but is not.
+# A colour with each channel halved: the faint line a block boundary is drawn
+# with, so a thirty-two-pixel square of the map reads as a square.
 nomethod fn dim(ink: int) -> int:
-    div(ink, 65536) * 65536 + bit_and(div(ink, 2048), 60) * 256 + bit_and(div(ink, 8), 60)
+    div(ink, 65536).shift_right(1) * 65536 + div(bit_and(ink, 65280), 256).shift_right(1) * 256 + bit_and(ink, 255).shift_right(1)
+
+# --- The ground -------------------------------------------------------------
 
 nomethod fn terrain_ink(city: simcity::city::City, x: int, y: int) -> int:
     ground = simcity::city::terrain(city, x, y)
@@ -262,64 +302,10 @@ nomethod fn terrain_ink(city: simcity::city::City, x: int, y: int) -> int:
     else:
         GRASS_INK
 
-# WHETHER a wire runs through this tile over a road or a rail, so the tile is a
-# crossing rather than a plain line: power under a carriageway.
-nomethod fn crossing?(city: simcity::city::City, x: int, y: int) -> bool:
-    simcity::city::wire_at(city, x, y) != 0 and (simcity::city::road_at(city, x, y) != 0 or simcity::city::rail_at(city, x, y) != 0)
-
-# The tile's own ink under a crossing's stripe: the carriageway's colour, so
-# the map still reads by hue and the wire is the stripe laid over it. A
-# crossing is only ever a wire over a road or a rail, so the branch that is
-# left is the rail.
-nomethod fn under_ink(city: simcity::city::City, x: int, y: int) -> int:
-    if simcity::city::road_at(city, x, y) != 0:
-        ROAD_INK
-    else:
-        RAIL_INK
-
-# The ink a wire crossing a road or a rail is drawn with: the wires' own ink,
-# and its live colour once power runs along it.
-nomethod fn wire_ink(city: simcity::city::City, x: int, y: int) -> int:
-    if simcity::city::powered_at(city, x, y) != 0:
-        WIRE_LIVE
-    else:
-        WIRE_INK
-
-# Which way the wire runs through the crossing, so the stripe follows it: the
-# four neighbours of a wire tile are where the line continues, and a neighbour
-# either side means the wire crosses here in that direction.
-nomethod fn wire_runs_across?(city: simcity::city::City, x: int, y: int) -> bool:
-    left = simcity::city::wire_at(city, x - 1, y) != 0
-    right = simcity::city::wire_at(city, x + 1, y) != 0
-    left and right
-
-nomethod fn wire_runs_down?(city: simcity::city::City, x: int, y: int) -> bool:
-    up = simcity::city::wire_at(city, x, y - 1) != 0
-    down = simcity::city::wire_at(city, x, y + 1) != 0
-    up and down
-
-# WHETHER this pixel of the tile is on the wire's stripe: two pixels either
-# side of the tile's middle, running across or down. A stripe of two shows a
-# line at this size without a cell's whole tile being wire.
-nomethod fn on_wire(row: int, col: int, across: bool) -> bool:
-    band = if across:
-        row >= CROSS_AT and row < CROSS_AT + CROSS_WIDE
-    else:
-        col >= CROSS_AT and col < CROSS_AT + CROSS_WIDE
-    band
-
+# What stands on the tile, for a tile that holds no line.
 nomethod fn ground(city: simcity::city::City, x: int, y: int) -> int:
     kind = simcity::city::zone_at(city, x, y)
-    if simcity::city::road_at(city, x, y) != 0:
-        ROAD_INK
-    elif simcity::city::rail_at(city, x, y) != 0:
-        RAIL_INK
-    elif simcity::city::wire_at(city, x, y) != 0:
-        if simcity::city::powered_at(city, x, y) != 0:
-            WIRE_LIVE
-        else:
-            WIRE_INK
-    elif kind == simcity::city::NONE:
+    if kind == simcity::city::NONE:
         terrain_ink(city, x, y)
     elif kind == simcity::city::COAL:
         COAL_INK
@@ -354,22 +340,188 @@ nomethod fn core_ink(city: simcity::city::City, x: int, y: int) -> int:
         140 * 65536 + 218 * 256 + 140
     else:
         ground(city, x, y)
-# --- The frame -------------------------------------------------------------
-# One texture pixel of the tile (X, Y) at pixel (COL, ROW) of that tile.
-nomethod fn shade(city: simcity::city::City, x: int, y: int, row: int, col: int, at: int) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
-    if at == simcity::city::pack(x, y):
-        pixel(CURSOR_INK)
-    elif crossing?(city, x, y):
-        # The wire over the carriageway: the road or rail fills the tile and
-        # the wire is a stripe of its own ink along it, so a crossing reads as
-        # both at once rather than as whichever the drawing reached first.
+
+# --- The three networks -----------------------------------------------------
+#
+# A line is drawn along its own direction rather than filling its tile, so a
+# run of road is a road and not a grey bar. Which way it runs is read from the
+# tiles beside it: a line that reaches both sides of a tile runs across it, one
+# that reaches its top and bottom runs down it, and one that reaches nowhere is
+# a tile of its own and is drawn as a dot.
+
+# The middle two rows or columns of a tile, where a line's own ink goes.
+nomethod fn stripe_across?(row: int) -> bool:
+    row >= CROSS_AT and row < CROSS_AT + CROSS_WIDE
+
+nomethod fn stripe_down?(col: int) -> bool:
+    col >= CROSS_AT and col < CROSS_AT + CROSS_WIDE
+
+# A road tile: asphalt, with a pale stripe where the carriageway is marked.
+# HERE is the tile's own road value, already read by its caller.
+nomethod fn road_ink(city: simcity::city::City, x: int, y: int, row: int, col: int) -> int:
+    across = simcity::city::road_at(city, x - 1, y) != 0 or simcity::city::road_at(city, x + 1, y) != 0
+    down = simcity::city::road_at(city, x, y - 1) != 0 or simcity::city::road_at(city, x, y + 1) != 0
+    marked = if across:
+        stripe_across?(row)
+    elif down:
+        stripe_down?(col)
+    else:
+        stripe_across?(row) and stripe_down?(col)
+    if marked:
+        ROAD_LINE
+    else:
+        ROAD_INK
+
+# A rail tile: wood-brown, with a sleeper every two rows.
+nomethod fn rail_ink(city: simcity::city::City, x: int, y: int, row: int, col: int) -> int:
+    across = simcity::city::rail_at(city, x - 1, y) != 0 or simcity::city::rail_at(city, x + 1, y) != 0
+    down = simcity::city::rail_at(city, x, y - 1) != 0 or simcity::city::rail_at(city, x, y + 1) != 0
+    along = if across:
+        stripe_across?(row)
+    elif down:
+        stripe_down?(col)
+    else:
+        stripe_across?(row) and stripe_down?(col)
+    if along and col.mod(2) == 0:
+        RAIL_TIE
+    else:
+        RAIL_INK
+
+# A wire tile: a brass line while it is dead, and a bright one once power runs.
+nomethod fn wire_run(city: simcity::city::City, x: int, y: int, row: int, col: int) -> int:
+    across = simcity::city::wire_at(city, x - 1, y) != 0 or simcity::city::wire_at(city, x + 1, y) != 0
+    down = simcity::city::wire_at(city, x, y - 1) != 0 or simcity::city::wire_at(city, x, y + 1) != 0
+    along = if across:
+        stripe_across?(row)
+    elif down:
+        stripe_down?(col)
+    else:
+        stripe_across?(row) and stripe_down?(col)
+    if along:
+        if simcity::city::powered_at(city, x, y) != 0:
+            WIRE_LIVE
+        else:
+            WIRE_INK
+    else:
+        terrain_ink(city, x, y)
+
+# The ink a wire crossing a road or a rail is drawn with: the wires' own ink,
+# and its live colour once power runs along it. A crossing is read in
+# `tile_ink`, which has the tile's road and rail values already.
+nomethod fn wire_ink(city: simcity::city::City, x: int, y: int) -> int:
+    if simcity::city::powered_at(city, x, y) != 0:
+        WIRE_LIVE
+    else:
+        WIRE_INK
+
+# Which way the wire runs through the crossing, so the stripe follows it: the
+# four neighbours of a wire tile are where the line continues, and a neighbour
+# either side means the wire crosses here in that direction.
+nomethod fn wire_runs_across?(city: simcity::city::City, x: int, y: int) -> bool:
+    left = simcity::city::wire_at(city, x - 1, y) != 0
+    right = simcity::city::wire_at(city, x + 1, y) != 0
+    left and right
+
+nomethod fn wire_runs_down?(city: simcity::city::City, x: int, y: int) -> bool:
+    up = simcity::city::wire_at(city, x, y - 1) != 0
+    down = simcity::city::wire_at(city, x, y + 1) != 0
+    up and down
+
+# WHETHER this pixel of the tile is on the wire's stripe: two pixels either
+# side of the tile's middle, running across or down. A stripe of two shows a
+# line at this size without a cell's whole tile being wire.
+nomethod fn on_wire(row: int, col: int, across: bool) -> bool:
+    band = if across:
+        stripe_across?(row)
+    else:
+        stripe_down?(col)
+    band
+
+# --- The block grid ---------------------------------------------------------
+#
+# A tile is eight pixels, which is too big to judge a distance by. A faint line
+# across every fourth tile gives the map a scale the player can count in, and
+# it is drawn on the tiles' own ink rather than over anything, so it never
+# hides a letter.
+
+# WHETHER this pixel is the block boundary: the last row of the bottom tile of
+# a block, or the last column of its rightmost one. Only those two pixels of a
+# tile can be one, and a frame asks this of every pixel, so the two tests that
+# are nearly always false come first.
+nomethod fn grid_line?(x: int, y: int, row: int, col: int) -> bool:
+    if col != TILE - 1 and row != TILE - 1:
+        false
+    elif col == TILE - 1 and x.mod(BLOCK) == BLOCK - 1:
+        true
+    else:
+        row == TILE - 1 and y.mod(BLOCK) == BLOCK - 1
+
+# --- The tile ---------------------------------------------------------------
+#
+# One texture pixel of a tile: the ink of what stands on it, the block's faint
+# line, the letter that says what the object is, and the one-pixel frame that
+# marks the tile under the pointer.
+
+# The ink of the tile at (X, Y), at its texture pixel (ROW, COL), with no
+# letter, no core and no cursor on it. A road, a rail and a wire are each drawn
+# along their own direction, so the first thing a tile is asked is which of
+# the three it holds -- and the answer is read once, because a frame asks this
+# question of every pixel of every tile on the screen.
+nomethod fn tile_ink(city: simcity::city::City, x: int, y: int, row: int, col: int) -> int:
+    road = simcity::city::road_at(city, x, y)
+    rail = simcity::city::rail_at(city, x, y)
+    wire = simcity::city::wire_at(city, x, y)
+    ink = if wire != 0 and (road != 0 or rail != 0):
         stripe = on_wire(row, col, wire_runs_across?(city, x, y) or not wire_runs_down?(city, x, y))
         if stripe:
-            pixel(wire_ink(city, x, y))
+            wire_ink(city, x, y)
+        elif road != 0:
+            ROAD_INK
         else:
-            pixel(under_ink(city, x, y))
+            RAIL_INK
+    elif road != 0:
+        road_ink(city, x, y, row, col)
+    elif rail != 0:
+        rail_ink(city, x, y, row, col)
+    elif wire != 0:
+        wire_run(city, x, y, row, col)
     else:
-        ink = ground(city, x, y)
+        ground(city, x, y)
+    if grid_line?(x, y, row, col):
+        dim(ink)
+    else:
+        ink
+
+# What a placement of TOOL on the tile under the pointer would answer, as the
+# colour its frame is drawn in: green for it fits, amber for the treasury, red
+# for the ground, and white where there is nothing chosen to place. One exit
+# per answer, so a reader follows one decision.
+nomethod fn preview_ink(city: simcity::city::City, tool: Tool, x: int, y: int) -> int:
+    if tool == Tool::None or tool == Tool::Inspect:
+        CURSOR_LOOK
+    else:
+        outcome = simcity::actions::fits(city, tool, x, y)
+        if outcome == simcity::actions::Placed::Built:
+            CURSOR_OK
+        elif outcome == simcity::actions::Placed::Poor:
+            CURSOR_POOR
+        elif outcome == simcity::actions::Placed::Blocked:
+            CURSOR_NO
+        else:
+            CURSOR_OFF
+
+# WHETHER (ROW, COL) is the tile's own edge: the one-pixel frame the cursor is
+# drawn as. The interior is left alone, so the letter and the colour of the
+# tile under the pointer are still readable while it is being placed.
+nomethod fn edge_pixel?(row: int, col: int) -> bool:
+    row == 0 or col == 0 or row == TILE - 1 or col == TILE - 1
+
+nomethod fn shade(city: simcity::city::City, x: int, y: int, row: int, col: int, at: int, tool: Tool) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
+    under = at == simcity::city::pack(x, y)
+    if under and edge_pixel?(row, col) and tool != Tool::None:
+        pixel(preview_ink(city, tool, x, y))
+    else:
+        ink = tile_ink(city, x, y, row, col)
         lit = if row > 0 and row <= core_rows(city, x, y):
             core_ink(city, x, y)
         else:
@@ -382,15 +534,20 @@ nomethod fn shade(city: simcity::city::City, x: int, y: int, row: int, col: int,
 
 # One texture-pixel row of the viewport: `row` is the pixel row within the
 # tile, `ty` the map row it belongs to.
-nomethod fn span(city: simcity::city::City, origin_x: int, ty: int, row: int, across: int, at: int) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
+nomethod fn span(city: simcity::city::City, origin_x: int, ty: int, row: int, across: int, at: int, tool: Tool) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
     pixels = loop px from 0 to TILE * across:
         tile = div(px, TILE)
-        shade(city, origin_x + tile, ty, row, px.mod(TILE), at)
+        shade(city, origin_x + tile, ty, row, px.mod(TILE), at, tool)
     flat(pixels)
 
 # The whole viewport as one list of bytes, with the tile AT (or none) marked
 # as the placement preview.
-nomethod fn frame(city: simcity::city::City, origin_x: int, origin_y: int, across: int, down: int, at: int) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
+nomethod fn frame_with(city: simcity::city::City, origin_x: int, origin_y: int, across: int, down: int, at: int, tool: Tool) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
     rows = loop py from 0 to TILE * down:
-        span(city, origin_x, origin_y + div(py, TILE), py.mod(TILE), across, at)
+        span(city, origin_x, origin_y + div(py, TILE), py.mod(TILE), across, at, tool)
     flat(rows)
+
+# The viewport with the tile AT marked, for the tests: a tile is marked with
+# the chosen tool's preview, and nothing at all is chosen by default.
+nomethod fn frame(city: simcity::city::City, origin_x: int, origin_y: int, across: int, down: int, at: int) -> List[std::byte::Byte] errors std::byte::AboveRange, std::byte::BelowRange:
+    frame_with(city, origin_x, origin_y, across, down, at, Tool::None)

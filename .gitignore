@@ -7,3 +7,8 @@ sight.log
 botlish-linux-x86_64
 *.botpkg
 *.provenance.json
+# the screenshot tool's output, and a city left behind by a test run
+saves.tmp
+*.rgba
+shot*.rgba
+simcity.save

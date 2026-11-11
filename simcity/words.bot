@@ -3,10 +3,17 @@
 # Botlish has no formatting and no interpolation, so every figure is built as
 # text here and nowhere else: a label is given one string, and the string is
 # made by this module from the city the simulation owns.
+#
+# A figure is grouped as a person reads it -- $16,035 rather than $16035 --
+# because a treasury is the number the player looks at most and a long run of
+# digits is a number to parse rather than to read.
+import std::float64
 
 import std::int
 
 import std::str
+
+import type simcity::city::Tool
 
 import simcity::actions
 
@@ -14,13 +21,44 @@ import simcity::city
 
 import simcity::sim
 
-import type simcity::city::Tool
-
 nomethod fn char(c: UnicodeChar) -> str:
     "".append_char(c)
 
+nomethod fn comma() -> str:
+    char(',')
+
+# DIGITS in threes from the right: the grouping a figure is written with. The
+# accumulator is what keeps this from declaring UpperOverrun: a substring of
+# one character is handled where it is taken, and the walk itself returns
+# text rather than an error.
+nomethod fn group_walk(digits: str, i: int, out: str, n: int) -> str:
+    if i >= n:
+        out
+    else:
+        here = digits.substring(i, i + 1):
+            on LowerUnderrun:
+                ""
+            on UpperOverrun:
+                ""
+        left = n - i
+        mark = if i > 0 and left.mod(3) == 0:
+            comma()
+        else:
+            ""
+        group_walk(digits, i + 1, out.concat(mark).concat(here), n)
+
+nomethod fn grouped_text(digits: str) -> str:
+    group_walk(digits, 0, "", std::str::length(digits))
+
+# N as a grouped figure, with a sign of its own where it has one.
+nomethod fn grouped(n: int) -> str:
+    if n < 0:
+        char('-').concat(grouped_text(std::int::to_string(-n)))
+    else:
+        grouped_text(std::int::to_string(n))
+
 nomethod fn dollars(n: int) -> str:
-    char('$').concat(std::int::to_string(n))
+    char('$').concat(grouped(n))
 
 nomethod fn month_name(month: int) -> str:
     if month == 0:
@@ -52,16 +90,16 @@ nomethod fn year_of(months: int) -> int:
     1900 + simcity::sim::months_years(months)
 
 nomethod fn show_funds(city: simcity::city::City) -> str:
-    "Funds ".concat(dollars(simcity::city::funds(city)))
+    dollars(simcity::city::funds(city))
 
 nomethod fn show_people(city: simcity::city::City) -> str:
-    "People ".concat(std::int::to_string(simcity::city::population(city)))
+    grouped(simcity::city::population(city))
 
 nomethod fn show_jobs(city: simcity::city::City) -> str:
-    "Jobs ".concat(std::int::to_string(simcity::city::jobs_open(city)))
+    grouped(simcity::city::jobs_open(city))
 
 nomethod fn show_tax(city: simcity::city::City) -> str:
-    "Tax ".concat(std::int::to_string(simcity::city::tax_rate(city))).append_char('%')
+    std::int::to_string(simcity::city::tax_rate(city)).append_char('%')
 
 nomethod fn show_income(city: simcity::city::City) -> str:
     "Taxes ".concat(dollars(simcity::city::income_year(city))).concat(" a year")
@@ -72,22 +110,6 @@ nomethod fn show_upkeep(city: simcity::city::City) -> str:
 nomethod fn show_balance(city: simcity::city::City) -> str:
     "Balance ".concat(dollars(simcity::city::balance_year(city))).concat(" a year")
 
-nomethod fn clamp(v: int, lo: int, hi: int) -> int:
-    if v < lo:
-        lo
-    elif v > hi:
-        hi
-    else:
-        v
-
-nomethod fn each(seen: int, made: int, text: str) -> str:
-    if made >= 20:
-        text
-    elif seen > 0:
-        each(seen - 1, made + 1, text.append_char('#'))
-    else:
-        each(seen - 1, made + 1, text.append_char('.'))
-
 # The tool's name, for the label that says what the player has chosen.
 nomethod fn show_tool(tool: Tool) -> str:
     if tool == Tool::Road:
@@ -97,19 +119,19 @@ nomethod fn show_tool(tool: Tool) -> str:
     elif tool == Tool::Rail:
         "Rail"
     elif tool == Tool::Residential:
-        "Residential zone"
+        "Residential"
     elif tool == Tool::Commercial:
-        "Commercial zone"
+        "Commercial"
     elif tool == Tool::Industrial:
-        "Industrial zone"
+        "Industrial"
     elif tool == Tool::Coal:
         "Coal plant"
     elif tool == Tool::Nuclear:
-        "Nuclear plant"
+        "Nuclear"
     elif tool == Tool::Police:
-        "Police post"
+        "Police"
     elif tool == Tool::Fire:
-        "Fire post"
+        "Fire"
     elif tool == Tool::Park:
         "Park"
     elif tool == Tool::Bulldoze:
@@ -118,6 +140,39 @@ nomethod fn show_tool(tool: Tool) -> str:
         "Inspect"
     else:
         "Nothing chosen"
+
+# The sentence that goes over a tool's button: what it is for, what it needs,
+# and what it costs. A palette of prices is a thing to memorise; this is a
+# thing to read.
+nomethod fn show_tip(tool: Tool) -> str:
+    if tool == Tool::Road:
+        "A road: cars drive on it. Drag to run one, and it needs a road beside it to be worth anything."
+    elif tool == Tool::Wire:
+        "A power line: carries what a plant makes to what needs it. Drag to run one; it may cross a road."
+    elif tool == Tool::Rail:
+        "A rail: heavy traffic, and it may not cross a road."
+    elif tool == Tool::Residential:
+        "Where people live. A 3 x 3 block that grows once it has power and a road beside it."
+    elif tool == Tool::Commercial:
+        "Where people shop. A 3 x 3 block that grows on the city's own trade."
+    elif tool == Tool::Industrial:
+        "Where people work. A 3 x 3 block; the dirtiest thing you can build."
+    elif tool == Tool::Coal:
+        "A coal plant: cheap power, and it dirties the ground around it."
+    elif tool == Tool::Nuclear:
+        "A nuclear plant: all the power a big city wants, at ten times the price."
+    elif tool == Tool::Police:
+        "A police post: keeps the crime rate down near it."
+    elif tool == Tool::Fire:
+        "A fire post: keeps a fire from spreading near it."
+    elif tool == Tool::Park:
+        "A park: somewhere pleasant, and worth a little to the land around it."
+    elif tool == Tool::Bulldoze:
+        "Takes away what is on a tile, and clears trees and rough ground for a dollar."
+    elif tool == Tool::Inspect:
+        "Reads a tile: what stands on it, and whether it has power and a road."
+    else:
+        "Nothing chosen: click a tool to build with it."
 
 nomethod fn zone_name(kind: int) -> str:
     if kind == simcity::city::RES:
@@ -163,7 +218,7 @@ nomethod fn show_cost(tool: Tool) -> str:
 nomethod fn show_tile(city: simcity::city::City, x: int, y: int) -> str:
     ground = simcity::city::terrain(city, x, y)
     kind = simcity::city::zone_at(city, x, y)
-    where = "at ".append_char(' ').concat(std::int::to_string(x)).append_char(',').append_char(' ').concat(std::int::to_string(y))
+    where = "at ".concat(std::int::to_string(x)).append_char(',').append_char(' ').concat(std::int::to_string(y))
     what = if simcity::city::road_at(city, x, y) != 0:
         "Road"
     elif simcity::city::rail_at(city, x, y) != 0:
@@ -201,7 +256,20 @@ nomethod fn show_tile(city: simcity::city::City, x: int, y: int) -> str:
     worth = simcity::city::value_at(city, x, y)
     what.concat(grown).append_char(' ').concat(where).concat(", power ").concat(powered).concat(", road ").concat(served).concat(", smoke ").concat(std::int::to_string(smoke)).concat(", crime ").concat(std::int::to_string(crime)).concat(", worth ").concat(std::int::to_string(worth))
 
-# The RCI bar's figure for one zoning category, as a bar of hash marks.
+# The most a demand bar shows, and the words beside it: the bar is the demand
+# with its sign taken, and the caption says which way it points.
+DEMAND_MOST = 20
+
+# The size of a demand: how many marks its bar is filled with, with the sign
+# taken off. A demand below zero is no demand at all.
+nomethod fn demand_size(city: simcity::city::City, slot: int) -> int:
+    want = simcity::city::want(city, slot)
+    if want < 0:
+        -want
+    else:
+        want
+
+# The RCI caption: the letter, the sign, and the demand as a figure.
 nomethod fn show_demand(city: simcity::city::City, slot: int) -> str:
     name = if slot == 0:
         char('R')
@@ -210,11 +278,11 @@ nomethod fn show_demand(city: simcity::city::City, slot: int) -> str:
     else:
         char('I')
     want = simcity::city::want(city, slot)
-    filled = if want >= 0:
-        want
+    sign = if want < 0:
+        char('-')
     else:
-        -want
-    name.append_char(' ').concat(each(filled, 0, ""))
+        char('+')
+    name.append_char(' ').concat(sign).concat(std::int::to_string(demand_size(city, slot)))
 
 nomethod fn show_date(city: simcity::city::City) -> str:
     month_name(simcity::city::month(city)).append_char(' ').concat(std::int::to_string(year_of(simcity::city::ticks(city))))

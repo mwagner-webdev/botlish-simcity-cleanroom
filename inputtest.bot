@@ -30,7 +30,10 @@
 #  11. the arrow keys move the view once per press;
 #  12. the wheel moves the view and nothing else;
 #  13. a scrolled view builds where the pointer is, not where it was;
-#  14. the map's last visible column is built, and nothing past it.
+#  14. the map's last visible column is built, and nothing past it;
+#  15. a number key picks a tool, and the keys a save field is taking are its
+#      own;
+#  16. the right button reads the tile and builds nothing.
 import raven
 import raven::window
 import std::ffi::c
@@ -161,6 +164,13 @@ nomethod fn turn(set: Table, dx: int, dy: int) -> Table errors NonFiniteFloat:
 nomethod fn key_tap(set: Table, key: std::ffi::c::UInt) -> Table:
     tapped = set.game.window.inject_key(key, 0)
     moved = frames(4)
+    Table {game: simcity::app::take_events(set.game), map: set.map}
+
+# The right mouse button goes down where the pointer is, a frame delivers the
+# press, and the game answers it.
+nomethod fn right_press(set: Table) -> Table:
+    down = set.game.window.inject_button(raven::window::R_MOUSE_RIGHT, true)
+    delivered = frames(4)
     Table {game: simcity::app::take_events(set.game), map: set.map}
 
 # A key goes down and stays down.
@@ -416,7 +426,7 @@ nomethod fn a_click_on_a_control_builds_nothing() -> int errors raven::RavenFail
     typing = frames(4)
     typed_up = answered(taken)
     field = raven::input_text(typed_up.game.path)
-    box_clicked = typed_up.game.window.click(typed_up.game.tax):
+    box_clicked = typed_up.game.window.click(typed_up.game.rate):
         on NonFiniteFloat:
             unit
     boxing = frames(4)
@@ -593,6 +603,63 @@ nomethod fn the_map_edge_builds_the_last_column() -> int errors raven::RavenFail
 
 # --- The report -------------------------------------------------------------
 
+# 15. A number key picks a tool, Escape puts it down, and the keys a text field
+# is taking are its own. The keyboard is the palette's: the nine things a
+# player builds stand on 1 to 9 and the bulldozer on 0, and the save field
+# takes every key for itself while it has the focus -- a watch of the window
+# reports each one, which is why the game asks the field itself whether it is
+# focused before it answers anything.
+nomethod fn a_number_key_picks_a_tool() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = ready()
+    roaded = key_tap(set, raven::window::R_KEY_1)
+    one = simcity::app::state(roaded.game).tool
+    wired = key_tap(roaded, raven::window::R_KEY_2)
+    two = simcity::app::state(wired.game).tool
+    zoned = key_tap(wired, raven::window::R_KEY_5)
+    five = simcity::app::state(zoned.game).tool
+    # The bulldozer stands on 0, and Escape puts whatever was chosen down.
+    cleared = key_tap(wired, raven::window::R_KEY_0)
+    nought = simcity::app::state(cleared.game).tool
+    escaped = key_tap(cleared, raven::window::R_KEY_ESCAPE)
+    none = simcity::app::state(escaped.game).tool
+    # The save field takes the keyboard, and the keys typed into it are its
+    # own: the digit is a character of the name, not a tool.
+    clicked = zoned.game.window.click(escaped.game.path):
+        on NonFiniteFloat:
+            unit
+    focused = frames(4)
+    taken = answered(escaped)
+    typed = escaped.game.window.inject_text(std::int::to_string(7))
+    typing = frames(4)
+    held = answered(taken)
+    pressed = key_tap(held, raven::window::R_KEY_1)
+    after = simcity::app::state(pressed.game).tool
+    name = raven::input_text(pressed.game.path)
+    done()
+    if one == simcity::city::Tool::Road and two == simcity::city::Tool::Wire and five == simcity::city::Tool::Commercial and nought == simcity::city::Tool::Bulldoze and none == simcity::city::Tool::None and after == none and std::str::length(name) > 0:
+        1
+    else:
+        0
+
+# 16. The right button reads the tile instead of building on it: one press,
+# the inspector's answer on the note line, and the treasury exactly where it
+# was. A read is not a construction.
+nomethod fn the_right_button_reads_the_tile() -> int errors raven::RavenFailed, NonFiniteFloat:
+    set = picked(ready(), simcity::city::Tool::Road)
+    at = dry_spot(the_city(set), 0, 0, 0, 0)
+    aimed = aim(set, at.x, at.y)
+    before = money(aimed)
+    made = roads(aimed)
+    read = right_press(aimed)
+    said = simcity::app::state(read.game).message
+    after = money(read)
+    built = roads(read)
+    done()
+    if built == made and after == before and std::str::length(said) > 0:
+        1
+    else:
+        0
+
 nomethod fn verdict(name: str, held: int) -> str:
     if held == 1:
         "PASS ".concat(name)
@@ -633,7 +700,9 @@ fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat:
     twelve = the_wheel_moves_only_the_view()
     thirteen = a_scrolled_view_builds_where_the_pointer_is()
     fourteen = the_map_edge_builds_the_last_column()
-    report = [verdict("a press builds once, and charges once", one), verdict("a button held still builds once", two), verdict("a drag builds along the tiles it crossed", three), verdict("a coalesced drag skips no tile", four), verdict("a coalesced drag the other way skips no tile", five), verdict("a release ends the drag", six), verdict("a click off the map builds nothing", seven), verdict("a click on a control builds nothing, and the control keeps its input", eight), verdict("distinct x and y pick the tile they name", nine), verdict("the window's edge is the map's edge", ten), verdict("the arrow keys move the view once per press", eleven), verdict("the wheel moves the view and nothing else", twelve), verdict("a scrolled view builds where the pointer is", thirteen), verdict("the map's last visible column is built", fourteen)]
+    fifteen = a_number_key_picks_a_tool()
+    sixteen = the_right_button_reads_the_tile()
+    report = [verdict("a press builds once, and charges once", one), verdict("a button held still builds once", two), verdict("a drag builds along the tiles it crossed", three), verdict("a coalesced drag skips no tile", four), verdict("a coalesced drag the other way skips no tile", five), verdict("a release ends the drag", six), verdict("a click off the map builds nothing", seven), verdict("a click on a control builds nothing, and the control keeps its input", eight), verdict("distinct x and y pick the tile they name", nine), verdict("the window's edge is the map's edge", ten), verdict("the arrow keys move the view once per press", eleven), verdict("the wheel moves the view and nothing else", twelve), verdict("a scrolled view builds where the pointer is", thirteen), verdict("the map's last visible column is built", fourteen), verdict("a number key picks a tool, Escape puts it down, and the field keeps its keys", fifteen), verdict("the right button reads the tile and builds nothing", sixteen)]
     counted = report.append(summary(report))
     counted
 

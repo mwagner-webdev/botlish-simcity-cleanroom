@@ -73,7 +73,8 @@ nomethod fn wire_column(city: simcity::city::City, x: int, y0: int, y1: int) -> 
 # A crossing has to be visible, or the player who laid a wire across a road
 # cannot tell that it is there: the tile is drawn with the carriageway's colour
 # and the wire as a stripe of its own ink. The count below is WIRE_INK's three
-# channels, which the renderer packs as R * 65536 + G * 256 + B.
+# channels, which the renderer packs as R * 65536 + G * 256 + B and takes apart
+# again wherever the ink is named rather than repeated.
 
 # How many pixels of one colour the rendered tile carries: four bytes a pixel,
 # so the walk steps by four and a pixel of the colour is one that matches.
@@ -96,7 +97,7 @@ nomethod fn stripe_of(city: simcity::city::City, x: int, y: int) -> int:
             []
         on std::byte::BelowRange:
             []
-    counted = ink_pixels(pixels, 96, 92, 88, 0):
+    counted = ink_pixels(pixels, bit_and(simcity::render::div(simcity::render::WIRE_INK, 65536), 255), bit_and(simcity::render::div(simcity::render::WIRE_INK, 256), 255), bit_and(simcity::render::WIRE_INK, 255), 0):
         on IndexNotFound:
             -1
         on std::byte::AboveRange:

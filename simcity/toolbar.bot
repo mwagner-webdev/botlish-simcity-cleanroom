@@ -6,23 +6,43 @@
 # it means this module does not have to hand a handle back for the game to
 # compare against an event.
 #
-# The palette is three short columns side by side. A control is only clickable
-# where the window draws it, and Raven lays a child out inside its parent's
-# slot: a column of twenty controls was 486 points tall in a 304-point slot,
-# so its bottom half was unreachable. Three columns of at most eight controls
-# are shorter than the slot, and the game's own test reads the palette's rect
+# The palette is three columns side by side. A control is only clickable where
+# the window draws it, and Raven lays a child out inside its parent's slot: a
+# column of twenty controls was 486 points tall in a 304-point slot, so its
+# bottom half was unreachable. Three columns of at most eight controls are
+# shorter than the slot, and the game's own test reads the palette's rect
 # back to prove it.
-import type simcity::city::Tool
-import raven
+#
+# Each column carries a heading, and each button says what it costs and
+# explains itself in a tooltip: a palette of thirteen prices is a thing to
+# memorise and a tooltip is a thing to read. The button the player has chosen
+# is given Raven's primary style, so the choice is visible on the palette
+# itself and not only in the note line -- which is why `palette` hands back
+# the buttons as a list as well as the column that holds them.
+import std::list
+
 import std::str
+
+import raven
+
+import type simcity::city::Tool
+
 import simcity::city
+
+import simcity::skin
+
 import simcity::words
 
-# One button that fires the named action.
-nomethod fn action(text: str, name: str) -> raven::Widget:
-    made = raven::button(text)
-    made.set_action(name)
-    made
+# The palette as it is built: the column that goes in the window, and the two
+# lists the game marks the chosen entry of.
+struct Palette:
+    column: raven::Widget
+    picks: List[raven::Widget]
+    paces: List[raven::Widget]
+
+# One button that fires the named action, with the tooltip TIP over it.
+nomethod fn action(text: str, name: str, tip: str) -> raven::Widget:
+    simcity::skin::action(text, name, tip)
 
 nomethod fn name_of(tool: Tool) -> str:
     if tool == Tool::Road:
@@ -54,38 +74,114 @@ nomethod fn name_of(tool: Tool) -> str:
     else:
         "none"
 
-# A tool's button: its name and its price.
+# The tool's number in the palette, for the button the game marks: the tools in
+# the order the columns hold them, from one. A key on the keyboard names the
+# same number, so the palette's order is the keyboard's.
+nomethod fn code_of(tool: Tool) -> int:
+    if tool == Tool::Road:
+        1
+    elif tool == Tool::Wire:
+        2
+    elif tool == Tool::Rail:
+        3
+    elif tool == Tool::Bulldoze:
+        4
+    elif tool == Tool::Residential:
+        5
+    elif tool == Tool::Commercial:
+        6
+    elif tool == Tool::Industrial:
+        7
+    elif tool == Tool::Coal:
+        8
+    elif tool == Tool::Nuclear:
+        9
+    elif tool == Tool::Police:
+        10
+    elif tool == Tool::Fire:
+        11
+    elif tool == Tool::Park:
+        12
+    elif tool == Tool::Inspect:
+        13
+    else:
+        0
+
+# A tool's button: its name and its price, with the sentence that says what it
+# is for over it.
 nomethod fn tool(tool: Tool) -> raven::Widget:
-    action(simcity::words::show_tool(tool).concat("  ").concat(simcity::words::show_cost(tool)), "tool.".concat(name_of(tool)))
+    action(simcity::words::show_tool(tool).concat("  ").concat(simcity::words::show_cost(tool)), "tool.".concat(name_of(tool)), simcity::words::show_tip(tool))
 
-# The tools that draw on the ground.
+# A column of buttons under its heading: the buttons are added to the panel
+# the fold starts with, and the fold's own count is what the next step takes.
+nomethod fn stack(name: str, buttons: List[raven::Widget]) -> raven::Widget:
+    fold button in buttons with intermediate column raven::vbox().add(simcity::skin::heading(name)):
+        column.add(button)
+
+# The tools that draw on the ground, one under another, under their heading.
 nomethod fn grounds() -> raven::Widget:
-    raven::vbox().add(tool(Tool::Road)).add(tool(Tool::Wire)).add(tool(Tool::Rail)).add(tool(Tool::Residential)).add(tool(Tool::Commercial)).add(tool(Tool::Industrial)).add(tool(Tool::Bulldoze)).add(action("Inspect", "tool.inspect"))
+    stack("Roads and land", [tool(Tool::Road), tool(Tool::Wire), tool(Tool::Rail), tool(Tool::Bulldoze)])
 
-# The tools that are built rather than drawn, and the key the map is labelled
-# with: the letters stand for what is on the tile.
+# The zones: what a city is made of.
+nomethod fn zones() -> raven::Widget:
+    stack("Zones", [tool(Tool::Residential), tool(Tool::Commercial), tool(Tool::Industrial)])
+
+# The buildings, and the letters the map labels them with.
 nomethod fn built() -> raven::Widget:
-    tools = raven::vbox().add(tool(Tool::Coal)).add(tool(Tool::Nuclear)).add(tool(Tool::Police)).add(tool(Tool::Fire)).add(tool(Tool::Park)).add(raven::label("Key: R C I zones")).add(raven::label("P N power plants")).add(raven::label("O police F fire"))
-    tools.add(raven::label("K park"))
+    stack("Buildings", [tool(Tool::Coal), tool(Tool::Nuclear), tool(Tool::Police), tool(Tool::Fire), tool(Tool::Park), tool(Tool::Inspect)])
+
+# The key the map is labelled with: a tile carries one letter, and the letter
+# is only worth something if the player knows what it stands for.
+nomethod fn key() -> raven::Widget:
+    stack("On the map", [simcity::skin::caption("R C I  zones"), simcity::skin::caption("P N  power plants"), simcity::skin::caption("O F  police and fire"), simcity::skin::caption("K  park")])
 
 # How fast the city runs, and the two things the player opens.
-nomethod fn others() -> raven::Widget:
-    tempos = raven::hbox().add(action("Pause", "tempo.pause")).add(action("Month", "tempo.month")).add(action("Rush", "tempo.rush"))
-    raven::vbox().add(tempos).add(action("Budget", "budget")).add(action("New town", "new")).add(action("Save", "save")).add(action("Load", "load")).add(raven::label("Click to build, drag")).add(raven::label("to run a line, arrow")).add(raven::label("keys move the view."))
+nomethod fn others(paces: List[raven::Widget]) -> raven::Widget:
+    tempos = raven::hbox().add(paces.get(0, simcity::skin::rule())).add(paces.get(1, simcity::skin::rule())).add(paces.get(2, simcity::skin::rule()))
+    tempos.set_spacing(4.0)
+    stack("City", [tempos, action("Budget", "budget", "Taxes, upkeep and the balance between them"), action("New town", "new", "Abandon this city and start another on new land"), action("Save", "save", "Write this city to the file named beside"), action("Load", "load", "Read the city in the file named beside back")])
 
-# The palette: three columns beside each other, so no column is deeper than
-# the map is tall.
-nomethod fn column() -> raven::Widget:
-    raven::hbox().add(grounds()).add(built()).add(others())
+# The three tempo buttons, in the order the game numbers them.
+nomethod fn tempo_buttons() -> List[raven::Widget]:
+    [action("Pause", "tempo.pause", "Stop the clock (the space bar does the same)"), action("Month", "tempo.month", "A month every half second"), action("Rush", "tempo.rush", "A month every tenth of a second")]
 
-# One character written as a string: Botlish writes a single character as a
-# character literal, and every label Raven takes is a string, so the four
+# Three lists as one: the columns stand side by side, and the game's list of
+# picks is every tool in the order the columns hold it.
+nomethod fn joins(ground: List[raven::Widget], zones: List[raven::Widget], buildings: List[raven::Widget]) -> List[raven::Widget]:
+    two = fold button in zones with intermediate seen ground:
+        seen.append(button)
+    three = fold button in buildings with intermediate seen two:
+        seen.append(button)
+    three
+
+# The palette: three columns of tools beside a column of the city's own
+# commands, with the key underneath, so no column is deeper than the map is
+# tall.
+nomethod fn palette() -> Palette errors NonFiniteFloat:
+    paces = tempo_buttons()
+    picks = joins([tool(Tool::Road), tool(Tool::Wire), tool(Tool::Rail), tool(Tool::Bulldoze)], [tool(Tool::Residential), tool(Tool::Commercial), tool(Tool::Industrial)], [tool(Tool::Coal), tool(Tool::Nuclear), tool(Tool::Police), tool(Tool::Fire), tool(Tool::Park), tool(Tool::Inspect)])
+    left = raven::vbox().add(grounds()).add(key())
+    left.set_spacing(12.0)
+    middle = raven::vbox().add(zones())
+    right = raven::vbox().add(built()).add(others(paces))
+    right.set_spacing(12.0)
+    column = raven::hbox().add(left).add(middle).add(right)
+    column.set_spacing(10.0)
+    Palette {column: column, picks: picks, paces: paces}
+
+# One character written as a string: a single character is a character
+# literal in Botlish, and every label Raven takes is a string, so the four
 # scroll buttons' glyphs go through here.
 nomethod fn one(c: UnicodeChar) -> str:
     "".append_char(c)
 
-# The view's scroll buttons: the map is four times the viewport, and Raven's
-# event bridge reports named actions but not keys, so the view moves by four
-# buttons a player can always reach rather than by a key nothing hears.
+# The view's scroll buttons: the map is four times the viewport, and a player
+# who builds on one side of the city has to reach the other. Raven's event
+# bridge reports named actions but not keys, so the view moves by four
+# buttons a player can always reach. Their glyphs are arrows rather than the
+# ASCII "<", "^", "v", ">" the first cut used: Roboto has the real ones, and
+# an arrow that points the way the view goes is one less thing to work out.
 nomethod fn view_move() -> raven::Widget:
-    raven::hbox().add(action(one('<'), "view.left")).add(action(one('^'), "view.up")).add(action(one('v'), "view.down")).add(action(one('>'), "view.right"))
+    made = raven::hbox().add(simcity::skin::glyph(one('←'), "view.left", "Move the view one screen left")).add(simcity::skin::glyph(one('↑'), "view.up", "Move the view one screen up")).add(simcity::skin::glyph(one('↓'), "view.down", "Move the view one screen down")).add(simcity::skin::glyph(one('→'), "view.right", "Move the view one screen right"))
+    made.set_spacing(4.0)
+    made

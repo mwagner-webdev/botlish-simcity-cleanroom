@@ -27,6 +27,12 @@
 # it answers: a press is an event, so a construction happens once however long
 # the button is held, and a drag is the move events with the button held, so a
 # line runs along the tiles the pointer actually crossed.
+#
+# What the screen is: a header of figures, the demand curves as bars, the map
+# beside the palette, and a status line at the bottom. `simcity::skin` holds
+# how all of it looks -- the theme, the cards, the figures -- and this module
+# holds what it says. The figures are `skin::Figure` records because a caption
+# and its value are two widgets and the two belong together.
 import std::abi::bytes
 import std::ffi::c
 import std::float64
@@ -43,6 +49,7 @@ import simcity::city
 import simcity::render
 import simcity::save
 import simcity::screen
+import simcity::skin
 import simcity::store
 import simcity::sim
 import simcity::toolbar
@@ -78,6 +85,13 @@ SAVE_PATH = "simcity.save"
 WINDOW_WIDE = 1040
 WINDOW_TALL = 620
 
+# The smallest the window may be dragged to: a map and three columns of tools
+# need more room than a label row, and a control Raven lays out below the
+# window's bottom edge is neither drawn nor clickable.
+WINDOW_MIN_WIDE = 860
+
+WINDOW_MIN_TALL = 480
+
 # How fast the city runs: a choice of simulated month per timer tick. A tick
 # of the timer is a tenth of a second, so "month" is a month every half a
 # second and "rush" is ten a second.
@@ -99,6 +113,10 @@ struct State:
     drag_y: int
     ticks: int
     message: str
+    # The tone of the note line: NONE_NOTE for information, GOOD_NOTE for
+    # what worked and BAD_NOTE for what did not. The colour of the line the
+    # player reads most is the one thing about it that is not its text.
+    tone: int
     redraw: bool
 
 # Everything the game holds: its state, and the widgets that show it.
@@ -107,18 +125,28 @@ struct Game:
     window: raven::Window
     map: raven::Widget
     tools: raven::Widget
-    funds: raven::Widget
-    people: raven::Widget
-    jobs: raven::Widget
-    date: raven::Widget
-    tempo: raven::Widget
-    want_r: raven::Widget
-    want_c: raven::Widget
-    want_i: raven::Widget
+    funds: simcity::skin::Figure
+    people: simcity::skin::Figure
+    jobs: simcity::skin::Figure
+    tax: simcity::skin::Figure
+    date: simcity::skin::Figure
+    tempo: simcity::skin::Figure
+    want_r: simcity::skin::Bar
+    want_c: simcity::skin::Bar
+    want_i: simcity::skin::Bar
     note: raven::Widget
+    where: raven::Widget
+    say: simcity::skin::Say
     path: raven::Widget
-    tax: raven::Widget
+    # The tax rate's own box, at the bottom: the header says what the rate is,
+    # and this is where the player changes it.
+    rate: raven::Widget
     clock: raven::Timer
+    # The palette's tool buttons, and the three tempo buttons: one entry per
+    # tool, so the chosen one can be re-styled without a second table. The
+    # entry for a tool nobody can choose is never read.
+    picks: List[raven::Widget]
+    paces: List[raven::Widget]
 
 # --- Small helpers ---------------------------------------------------------
 
@@ -128,13 +156,22 @@ nomethod fn whole(value: Float64) -> int:
     else:
         std::float64::truncate(value)
 
+# One character as a string: a single character is a character literal in
+# Botlish and every label Raven takes is a string, so a caption's letter goes
+# through here.
+nomethod fn char(c: UnicodeChar) -> str:
+    "".append_char(c)
+
+# How fast the city runs, as the figure and the button both say it: a word a
+# player reads at a glance in the header, and the tempo's own name on its
+# button.
 nomethod fn speed_label(speed: Speed) -> str:
     if speed == Speed::Paused:
-        "Tempo: paused"
+        "Paused"
     elif speed == Speed::Month:
-        "Tempo: month"
+        "Month"
     else:
-        "Tempo: rush"
+        "Rush"
 
 nomethod fn screen_width() -> Float64:
     std::float64::from_int(TILE_PX * ACROSS)
@@ -184,6 +221,7 @@ nomethod fn no_state() -> State:
         drag_y: -1,
         ticks: 0,
         message: "nothing here",
+        tone: simcity::skin::NONE_NOTE,
         redraw: false
     }
 
@@ -214,11 +252,15 @@ nomethod fn with_city(game: Game, city: simcity::city::City) -> Game:
         drag_y: s.drag_y,
         ticks: s.ticks,
         message: s.message,
+        tone: s.tone,
         redraw: true
     })
     game
 
-nomethod fn with_message(game: Game, text: str) -> Game:
+# The note line's text, and the kind of thing it is saying: the line at the
+# bottom of the window is the only thing the game says to the player in words,
+# so its colour is part of the sentence.
+nomethod fn with_message(game: Game, text: str, tone: int) -> Game:
     s = state(game)
     put(game, State {
         city: s.city,
@@ -232,6 +274,7 @@ nomethod fn with_message(game: Game, text: str) -> Game:
         drag_y: s.drag_y,
         ticks: s.ticks,
         message: text,
+        tone: tone,
         redraw: true
     })
     game
@@ -250,6 +293,7 @@ nomethod fn with_tool(game: Game, tool: Tool) -> Game:
         drag_y: s.drag_y,
         ticks: s.ticks,
         message: simcity::words::show_tool(tool).concat(", ").concat(simcity::words::show_cost(tool)),
+        tone: simcity::skin::NONE_NOTE,
         redraw: true
     })
     game
@@ -268,6 +312,7 @@ nomethod fn with_speed(game: Game, speed: Speed) -> Game:
         drag_y: s.drag_y,
         ticks: s.ticks,
         message: speed_label(speed),
+        tone: simcity::skin::NONE_NOTE,
         redraw: true
     })
     game
@@ -286,6 +331,7 @@ nomethod fn with_view(game: Game, origin_x: int, origin_y: int) -> Game:
         drag_y: s.drag_y,
         ticks: s.ticks,
         message: s.message,
+        tone: s.tone,
         redraw: true
     })
     game
@@ -307,6 +353,7 @@ nomethod fn with_cursor(game: Game, cursor_x: int, cursor_y: int) -> Game:
         drag_y: s.drag_y,
         ticks: s.ticks,
         message: s.message,
+        tone: s.tone,
         redraw: s.redraw or not same
     })
     game
@@ -329,12 +376,71 @@ nomethod fn with_drag(game: Game, drag_x: int, drag_y: int) -> Game:
         drag_y: drag_y,
         ticks: s.ticks,
         message: s.message,
+        tone: s.tone,
         redraw: s.redraw
     })
     game
 
 # --- The window ------------------------------------------------------------
 
+# One figure in the header: its caption over its value, in a column of its own.
+nomethod fn figure_column(shown: simcity::skin::Figure) -> raven::Widget:
+    raven::vbox().add(shown.caption).add(shown.value)
+
+# The three demand bars, each with its caption over it.
+nomethod fn bar_column(shown: simcity::skin::Bar) -> raven::Widget:
+    raven::vbox().add(shown.caption).add(shown.fill)
+
+# The header: the figures the player reads all the time, in one card so they
+# read as one strip of the screen rather than as a scatter of labels. The
+# spacing between the figures is what keeps a caption off its neighbour's
+# caption.
+nomethod fn header(funds: simcity::skin::Figure, people: simcity::skin::Figure, jobs: simcity::skin::Figure, tax: simcity::skin::Figure, date: simcity::skin::Figure, tempo: simcity::skin::Figure) -> raven::Widget errors NonFiniteFloat:
+    row = raven::hbox().add(figure_column(funds)).add(figure_column(people)).add(figure_column(jobs)).add(figure_column(tax)).add(simcity::skin::vrul()).add(figure_column(date)).add(simcity::skin::vrul()).add(figure_column(tempo))
+    row.set_spacing(16.0)
+    simcity::skin::card(row)
+
+# The demand curves: one card, three bars, and the key that says which way each
+# one points. The bars fill with the demand and the caption carries its sign.
+nomethod fn demand(want_r: simcity::skin::Bar, want_c: simcity::skin::Bar, want_i: simcity::skin::Bar) -> raven::Widget errors NonFiniteFloat:
+    bars = raven::hbox().add(bar_column(want_r)).add(bar_column(want_c)).add(bar_column(want_i))
+    bars.set_spacing(16.0)
+    key = raven::hbox().add(simcity::skin::caption("building")).add(simcity::skin::caption("leaving"))
+    key.set_spacing(8.0)
+    row = raven::hbox().add(simcity::skin::heading("What the city wants")).add(bars).add(simcity::skin::vrul()).add(key)
+    simcity::skin::card(row)
+
+# The bottom row: the note the game says something in, the file a city is kept
+# in, and the tax. The note takes what is left over, so a long sentence is a
+# long sentence and not a narrow column of three lines.
+nomethod fn status_row(note: raven::Widget, where: raven::Widget, path: raven::Widget, tax: raven::Widget) -> raven::Widget errors NonFiniteFloat:
+    note.id.Rslot_set_fill(1.0)
+    note.id.Rwidget_set_min_size(180.0, 0.0)
+    where.id.Rwidget_set_min_size(96.0, 0.0)
+    row = raven::hbox().add(note).add(simcity::skin::vrul()).add(where).add(simcity::skin::vrul()).add(simcity::skin::caption("City file")).add(path).add(simcity::skin::caption("Rate")).add(tax)
+    row.set_spacing(10.0)
+    row
+
+# The palette, held to the height of the map's column so that neither pushes
+# the other about and no control is laid out below the window.
+nomethod fn palette_box(sides: raven::Widget) -> raven::Widget errors NonFiniteFloat:
+    box = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_SIZE_BOX)}
+    box.add(sides)
+    box.id.Rwidget_set_size(std::float64::from_int(TOOL_WIDE), std::float64::from_int(screen_tall() + VIEW_ROW))
+    box
+
+# The map, in a box that holds its own size: the row beside it can never
+# stretch it into rectangles rather than squares. The image itself stays what
+# Game.map names: it is the image that the texture is uploaded into and whose
+# rect the pointer is aimed at.
+nomethod fn map_panel(map: raven::Widget) -> raven::Widget errors NonFiniteFloat:
+    box = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_SIZE_BOX)}
+    box.add(map)
+    box.id.Rwidget_set_size(screen_width(), screen_height())
+    box
+
+# The window and everything in it. The figures, the bars and the note line are
+# made here because the game's own loop updates them every frame.
 nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
     window = raven::window("SimCity", WINDOW_WIDE, WINDOW_TALL)
     # The window reports its keys, mouse buttons, pointer moves and wheel from
@@ -342,46 +448,52 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
     # own click, its own key and its own change, which is why the map asks
     # whether the pointer is inside its own rectangle before it builds.
     window.watch_input(true)
-    funds = raven::label(simcity::words::show_funds(city))
-    people = raven::label(simcity::words::show_people(city))
-    jobs = raven::label(simcity::words::show_jobs(city))
-    date = raven::label(simcity::words::show_date(city))
-    tempo = raven::label(speed_label(Speed::Month))
-    want_r = raven::label(simcity::words::show_demand(city, 0))
-    want_c = raven::label(simcity::words::show_demand(city, 1))
-    want_i = raven::label(simcity::words::show_demand(city, 2))
-    note = raven::label("Build something.")
-    # The file a save is written to and read from: a text field, because a
-    # fixed filename would leave a player with one city and no way to a second.
+    # A smallest the window may be: the palette is three columns of buttons
+    # beside a map, and Raven lays a control out only where the window draws
+    # it, so a window dragged narrower than the palette leaves its right-hand
+    # column unreachable. Raven's own minimum keeps that from happening, and
+    # the package does not wrap the call.
+    window.id.Rwindow_set_min_size(WINDOW_MIN_WIDE, WINDOW_MIN_TALL)
+    funds = simcity::skin::figure("Treasury", simcity::words::show_funds(city))
+    people = simcity::skin::figure("People", simcity::words::show_people(city))
+    jobs = simcity::skin::figure("Jobs", simcity::words::show_jobs(city))
+    tax_figure = simcity::skin::figure("Tax", simcity::words::show_tax(city))
+    date = simcity::skin::figure("Date", simcity::words::show_date(city))
+    tempo = simcity::skin::figure("Tempo", speed_label(Speed::Month))
+    want_r = simcity::skin::bar(char('R'))
+    want_c = simcity::skin::bar(char('C'))
+    want_i = simcity::skin::bar(char('I'))
+    note = simcity::skin::note_line("Pick a tool and click the map.")
+    # The island at the top of the window: what it always says is the game's
+    # name, and what it opens on is the same sentence the status line holds.
+    # A save or a refusal is news for a moment, and the line at the bottom is
+    # there for when the moment has passed.
+    said = simcity::skin::say(window, "SimCity", "A town of your own.")
+    # The tile the pointer is over, in the map's own coordinates: the map is
+    # four times the viewport, and a player who has scrolled twice wants to be
+    # told where they are.
+    where = simcity::skin::caption("no tile under the pointer")
     path = raven::text_input(SAVE_PATH)
+    path.id.Rtext_input_set_placeholder(simcity::skin::cstr("the file a city is kept in"))
+    path.id.Rtext_input_set_max_length(80)
     tax = raven::spin_box(0.0, 20.0)
+    tax.id.Rspin_box_set_step(1.0)
+    tax.id.Rspin_box_set_decimals(0)
     tax.set_spin_box_value(std::float64::from_int(simcity::city::tax_rate(city)))
-    top = raven::hbox().add(funds).add(people).add(jobs).add(date).add(tempo)
-    demand = raven::hbox().add(want_r).add(want_c).add(want_i)
     map = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_IMAGE)}
     map.id.Rwidget_set_size(screen_width(), screen_height())
-    # The map sits in a box that holds its own size, so the row beside it can
-    # never stretch it into rectangles rather than squares. The image itself
-    # stays what Game.map names: it is the image that the texture is uploaded
-    # into and whose rect the pointer is aimed at.
-    map_box = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_SIZE_BOX)}
-    map_box.add(map)
-    map_box.id.Rwidget_set_size(screen_width(), screen_height())
-    sides = simcity::toolbar::column()
-    # The palette is held to its own height too, and it is shorter than the map,
-    # so neither pushes the other about.
-    tool_box = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_SIZE_BOX)}
-    tool_box.add(sides)
-    tool_box.id.Rwidget_set_size(std::float64::from_int(TOOL_WIDE), std::float64::from_int(screen_tall() + VIEW_ROW))
-    # The scroll buttons sit directly under the map, because they move the map:
-    # the viewport is a quarter of the map, so a player who builds on one side
-    # of the city has to reach the other.
+    map.id.Rimage_set_stretch(raven::controls::R_STRETCH_FIT)
+    map.id.Rimage_set_corner_radius(8.0)
     view = simcity::toolbar::view_move()
-    map_column = raven::vbox().add(map_box).add(view)
-    body = raven::hbox().add(map_column).add(tool_box)
-    lower = raven::hbox().add(note).add(path).add(tax)
-    column = raven::vbox().add(top).add(demand).add(body).add(lower)
-    window.set_content(column)
+    set = simcity::toolbar::palette()
+    sides = palette_box(set.column)
+    map_column = raven::vbox().add(map_panel(map)).add(view)
+    body = raven::hbox().add(map_column).add(sides)
+    lower = status_row(note, where, path, tax)
+    root = raven::vbox().add(header(funds, people, jobs, tax_figure, date, tempo)).add(demand(want_r, want_c, want_i)).add(body).add(lower)
+    root.set_padding(14.0, 12.0, 14.0, 12.0)
+    root.set_spacing(10.0)
+    window.set_content(root)
     started = State {
         city: city,
         tool: simcity::city::Tool::None,
@@ -393,7 +505,8 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
         drag_x: -1,
         drag_y: -1,
         ticks: 0,
-        message: "Build something.",
+        message: "Pick a tool and click the map.",
+        tone: simcity::skin::NONE_NOTE,
         redraw: true
     }
     Game {
@@ -405,14 +518,19 @@ nomethod fn build(city: simcity::city::City) -> Game errors NonFiniteFloat:
         funds: funds,
         people: people,
         jobs: jobs,
+        tax: tax_figure,
         date: date,
         tempo: tempo,
         want_r: want_r,
         want_c: want_c,
         want_i: want_i,
         note: note,
+        where: where,
+        say: said,
         path: path,
-        tax: tax
+        rate: tax,
+        picks: set.picks,
+        paces: set.paces
     }
 
 nomethod fn clear(game: Game) -> Game:
@@ -429,6 +547,7 @@ nomethod fn clear(game: Game) -> Game:
         drag_y: s.drag_y,
         ticks: s.ticks,
         message: s.message,
+        tone: s.tone,
         redraw: false
     })
     game
@@ -443,7 +562,7 @@ nomethod fn map_file(game: Game) -> Game:
         game
     else:
         at = simcity::city::pack(s.cursor_x, s.cursor_y)
-        pixels = simcity::render::frame(s.city, s.origin_x, s.origin_y, ACROSS, DOWN, at)
+        pixels = simcity::render::frame_with(s.city, s.origin_x, s.origin_y, ACROSS, DOWN, at, s.tool)
         wide = simcity::render::TILE * ACROSS
         tall = simcity::render::TILE * DOWN
         opened = simcity::screen::open(wide, tall):
@@ -457,18 +576,70 @@ nomethod fn map_file(game: Game) -> Game:
         game.map.id.Rimage_set_texture(fresh)
         clear(game)
 
+# The palette's chosen button, and the tempo's: the tool the player is holding
+# is the one wearing the accent, and it is the only thing on the screen that
+# has to be legible without reading.
+# The tempo's number in the game's own order: paused, a month a half second,
+# rushing.
+nomethod fn pace_of(speed: Speed) -> int:
+    if speed == Speed::Paused:
+        0
+    elif speed == Speed::Month:
+        1
+    else:
+        2
+
+nomethod fn show_picks(game: Game) -> unit:
+    s = state(game)
+    fold pick in game.picks with intermediate n 0:
+        simcity::skin::picked(pick, n + 1 == simcity::toolbar::code_of(s.tool))
+        n + 1
+    fold pace in game.paces with intermediate n 0:
+        simcity::skin::picked(pace, n == pace_of(s.speed))
+        n + 1
+    unit
+
+# The tile under the pointer, in the map's own coordinates -- the same ones the
+# inspector gives, so what the player reads in the note line and what they can
+# read beside the palette are one answer.
+nomethod fn show_where(s: State) -> str:
+    if s.cursor_x < 0:
+        "no tile under the pointer"
+    else:
+        "tile ".concat(std::int::to_string(s.cursor_x)).append_char(',').append_char(' ').concat(std::int::to_string(s.cursor_y))
+
 nomethod fn show(game: Game) -> Game:
     s = state(game)
-    game.funds.set_text(simcity::words::show_funds(s.city))
-    game.people.set_text(simcity::words::show_people(s.city))
-    game.jobs.set_text(simcity::words::show_jobs(s.city))
-    game.date.set_text(simcity::words::show_date(s.city))
-    game.tempo.set_text(speed_label(s.speed))
-    game.want_r.set_text(simcity::words::show_demand(s.city, 0))
-    game.want_c.set_text(simcity::words::show_demand(s.city, 1))
-    game.want_i.set_text(simcity::words::show_demand(s.city, 2))
+    simcity::skin::show_figure(game.funds, simcity::words::show_funds(s.city))
+    simcity::skin::figure_color(game.funds.value, simcity::city::funds(s.city) < 0)
+    simcity::skin::show_figure(game.people, simcity::words::show_people(s.city))
+    simcity::skin::show_figure(game.jobs, simcity::words::show_jobs(s.city))
+    simcity::skin::show_figure(game.tax, simcity::words::show_tax(s.city))
+    simcity::skin::show_figure(game.date, simcity::words::show_date(s.city))
+    simcity::skin::show_figure(game.tempo, speed_label(s.speed))
+    simcity::skin::show_bar(game.want_r, simcity::words::demand_size(s.city, 0), simcity::words::DEMAND_MOST)
+    simcity::skin::show_bar(game.want_c, simcity::words::demand_size(s.city, 1), simcity::words::DEMAND_MOST)
+    simcity::skin::show_bar(game.want_i, simcity::words::demand_size(s.city, 2), simcity::words::DEMAND_MOST)
     game.note.set_text(s.message)
+    simcity::skin::note_color(game.note, s.tone)
+    # The island says what the status line says, once, and folds back: the
+    # sentence is new when the message has changed, and Raven's own
+    # expand-for is what gives it its moment.
+    heard = raven::label_text(game.note):
+        on InvalidUtf8:
+            ""
+    if heard != s.message:
+        simcity::skin::announce(game.say, s.message)
+    else:
+        unit
+    game.where.set_text(show_where(s))
+    rate = std::float64::from_int(simcity::city::tax_rate(s.city)):
+        on NonFiniteFloat:
+            0.0
+    game.rate.set_spin_box_value(rate)
+    show_picks(game)
     map_file(game)
+    game
 
 # --- The pointer -----------------------------------------------------------
 #
@@ -569,13 +740,18 @@ nomethod fn steps_between(from_x: int, from_y: int, to_x: int, to_y: int) -> Lis
 nomethod fn build_at(game: Game, x: int, y: int) -> Game:
     s = state(game)
     if s.tool == Tool::Inspect:
-        with_message(game, simcity::words::show_tile(s.city, x, y))
+        with_message(game, simcity::words::show_tile(s.city, x, y), simcity::skin::NONE_NOTE)
     else:
         outcome = simcity::actions::fits(s.city, s.tool, x, y)
         if outcome == simcity::actions::Placed::Built:
             with_city(game, simcity::actions::place(s.city, s.tool, x, y))
         else:
-            with_message(game, simcity::words::show_refusal(s.city, s.tool, x, y, outcome))
+            with_message(game, simcity::words::show_refusal(s.city, s.tool, x, y, outcome), simcity::skin::BAD_NOTE)
+
+# Reads the tile under the pointer without changing anything: the right button
+# is for looking, and the left one is for doing.
+nomethod fn look_at(game: Game, x: int, y: int) -> Game:
+    with_message(game, simcity::words::show_tile(state(game).city, x, y), simcity::skin::NONE_NOTE)
 
 # Builds along the tiles from (from_x, from_y) to (to_x, to_y) and leaves the
 # drag on the last of them: a line runs a tile at a time, and the treasury is
@@ -690,9 +866,9 @@ nomethod fn save_city(game: Game) -> Game:
         on simcity::store::StoreFailed:
             false
     if written:
-        with_message(game, "Saved ".concat(path).append_char('.'))
+        with_message(game, "Saved ".concat(path).append_char('.'), simcity::skin::GOOD_NOTE)
     else:
-        with_message(game, "Could not write ".concat(path).append_char('.'))
+        with_message(game, "Could not write ".concat(path).append_char('.'), simcity::skin::BAD_NOTE)
 
 # The city a save's text describes, made the game's own.
 nomethod fn read_back(game: Game, text: str) -> Game:
@@ -718,9 +894,9 @@ nomethod fn load_city(game: Game) -> Game:
     found = std::str::length(text) > 0
     if found:
         loaded = read_back(game, text)
-        with_message(loaded, "Loaded ".concat(path).append_char('.'))
+        with_message(loaded, "Loaded ".concat(path).append_char('.'), simcity::skin::GOOD_NOTE)
     else:
-        with_message(game, "Nothing to load at ".concat(path).append_char('.'))
+        with_message(game, "Nothing to load at ".concat(path).append_char('.'), simcity::skin::BAD_NOTE)
 
 nomethod fn budget_line(city: simcity::city::City) -> str:
     simcity::words::show_income(city).concat(", ").concat(simcity::words::show_upkeep(city)).concat(", ").concat(simcity::words::show_balance(city))
@@ -728,16 +904,43 @@ nomethod fn budget_line(city: simcity::city::City) -> str:
 nomethod fn begin(game: Game) -> Game:
     fresh = simcity::city::make(MAP_WIDE, MAP_TALL, 4242, 20000)
     restarted = with_city(game, fresh)
-    with_message(restarted, "A new town on new land.")
+    with_message(restarted, "A new town on new land.", simcity::skin::GOOD_NOTE)
 
 nomethod fn inspect(game: Game) -> Game:
-    with_message(with_tool(game, simcity::city::Tool::Inspect), "Inspect: click a tile to read what is on it.")
+    with_message(with_tool(game, simcity::city::Tool::Inspect), "Inspect: click a tile to read what is on it.", simcity::skin::NONE_NOTE)
 
 nomethod fn rate(game: Game) -> Game:
-    value = raven::spin_box_value(game.tax):
+    value = raven::spin_box_value(game.rate):
         on NonFiniteFloat:
             std::float64::from_int(7)
     with_city(game, simcity::city::with_bank(state(game).city, simcity::city::TAX, rate_of(value)))
+
+# The tool the number key KEY names, or none: the nine things a player builds
+# stand on 1 to 9 and the bulldozer on 0, so the palette's first ten buttons
+# are the ten keys.
+nomethod fn tool_by_key(key: int) -> Tool:
+    if key == raven::window::R_KEY_1:
+        Tool::Road
+    elif key == raven::window::R_KEY_2:
+        Tool::Wire
+    elif key == raven::window::R_KEY_3:
+        Tool::Rail
+    elif key == raven::window::R_KEY_4:
+        Tool::Residential
+    elif key == raven::window::R_KEY_5:
+        Tool::Commercial
+    elif key == raven::window::R_KEY_6:
+        Tool::Industrial
+    elif key == raven::window::R_KEY_7:
+        Tool::Coal
+    elif key == raven::window::R_KEY_8:
+        Tool::Nuclear
+    elif key == raven::window::R_KEY_9:
+        Tool::Police
+    elif key == raven::window::R_KEY_0:
+        Tool::Bulldoze
+    else:
+        Tool::None
 
 nomethod fn act(game: Game, name: str) -> Game:
     if name == "tempo.pause":
@@ -773,7 +976,7 @@ nomethod fn act(game: Game, name: str) -> Game:
     elif name == "tool.inspect":
         inspect(game)
     elif name == "budget":
-        with_message(game, budget_line(state(game).city))
+        with_message(game, budget_line(state(game).city), simcity::skin::NONE_NOTE)
     elif name == "new":
         begin(game)
     elif name == "save":
@@ -797,7 +1000,14 @@ nomethod fn act(game: Game, name: str) -> Game:
 # `KeyPressed` per press, however long the key is held. Raven's own auto-repeat
 # arrives as `KeyRepeated` and is deliberately not acted on, which is the
 # behaviour the polled mask had -- a held key moves the view one step and then
-# waits to be released. No other key does anything.
+# waits to be released.
+#
+# The task of a key is now decided by what the player is doing with the
+# keyboard: while the city-file field has the focus, every key is the field's
+# to take, and a digit typed into a filename is a digit in that filename
+# rather than a tool. `typing?` is the question "is a control taking text?" --
+# and it is the one question the package's event does not answer, so the game
+# asks the field itself whether it is focused.
 #
 # The wheel scrolls the view, one step a line: the same step the arrow keys and
 # the four buttons under the map move it by, because that is the one scrolling
@@ -805,9 +1015,29 @@ nomethod fn act(game: Game, name: str) -> Game:
 # answered here rather than dropped by falling through, so it can never be
 # mistaken for a construction, and the view is the only thing it moves.
 
-# A key went down: the four arrow keys move the view one step.
+# WHETHER the save field has the keyboard: a watch of the window reports every
+# key even while a control is taking text, so this is the only way to tell the
+# two apart. Raven's events carry no "consumed" flag.
+nomethod fn typing?(game: Game) -> bool:
+    game.path.id.Rwidget_is_focused() != 0
+
+# The tool the key names, chosen: a key that names no tool is a key nobody
+# claims, and the game is left as it was. One exit per answer, so the reader
+# follows one decision.
+nomethod fn with_key_tool(game: Game, tool: Tool) -> Game:
+    if tool == Tool::None:
+        game
+    else:
+        with_tool(game, tool)
+
+# A key went down. The four arrow keys move the view one step, the ten digits
+# choose a tool, the space bar turns the clock, and Escape puts the tool down:
+# a player who has taken the bulldozer by mistake wants one key back.
 nomethod fn key_press(game: Game, key: int) -> Game:
-    if key == raven::window::R_KEY_LEFT:
+    s = state(game)
+    if typing?(game):
+        game
+    elif key == raven::window::R_KEY_LEFT:
         scroll(game, -1, 0)
     elif key == raven::window::R_KEY_RIGHT:
         scroll(game, 1, 0)
@@ -815,8 +1045,15 @@ nomethod fn key_press(game: Game, key: int) -> Game:
         scroll(game, 0, -1)
     elif key == raven::window::R_KEY_DOWN:
         scroll(game, 0, 1)
+    elif key == raven::window::R_KEY_SPACE:
+        if s.speed == Speed::Paused:
+            with_speed(game, Speed::Month)
+        else:
+            with_speed(game, Speed::Paused)
+    elif key == raven::window::R_KEY_ESCAPE:
+        with_tool(game, Tool::None)
     else:
-        game
+        with_key_tool(game, tool_by_key(key))
 
 # The wheel turned: the view moves one step a line, up and left positive. A
 # turn is never a construction.
@@ -832,6 +1069,15 @@ nomethod fn wheel_turn(game: Game, event: raven::Event) -> Game:
     else:
         game
 
+# The right button went down: the tile under the pointer is read rather than
+# changed, and a press off the map is a press nobody claims.
+nomethod fn right_press(game: Game, event: raven::Event, map: raven::Rect) -> Game:
+    at = tile_at(map, state(game).origin_x, state(game).origin_y, event.x, event.y)
+    if at.x < 0:
+        game
+    else:
+        look_at(game, at.x, at.y)
+
 # One event of a watched window, answered: what the controls report, what the
 # keys do, and what the pointer and the wheel do. An event nobody here claims is
 # dropped -- a held key's auto-repeat (`KeyRepeated`) among them, which is what
@@ -845,6 +1091,8 @@ nomethod fn accept(game: Game, event: raven::Event, map: raven::Rect) -> Game:
         key_press(game, event.value)
     elif event.kind == raven::EventKind::MousePressed and event.value == raven::window::R_MOUSE_LEFT:
         press(game, event, map)
+    elif event.kind == raven::EventKind::MousePressed and event.value == raven::window::R_MOUSE_RIGHT:
+        right_press(game, event, map)
     elif event.kind == raven::EventKind::MouseMoved:
         move_pointer(game, event, map)
     elif event.kind == raven::EventKind::MouseReleased:
@@ -895,6 +1143,7 @@ nomethod fn month(game: Game) -> Game:
         drag_y: s.drag_y,
         ticks: next_ticks,
         message: s.message,
+        tone: s.tone,
         redraw: s.redraw or enough
     })
     game
@@ -913,6 +1162,11 @@ nomethod fn start(city: simcity::city::City, how: raven::Options) -> str errors 
     begun = raven::start(how):
         on raven::RavenFailed failure:
             unit
+    begun
+    # The theme is applied once, after Raven has started: Raven's own default
+    # is a neutral dark, and the game gives itself the one accent its palette
+    # is built on.
+    simcity::skin::theme()
     game = build(city):
         on NonFiniteFloat:
             build(simcity::city::make(48, 48, 7, 20000))

@@ -1,0 +1,136 @@
+# shot.bot -- builds the game's window on the real renderer, plays a few
+# actions into it, and writes the window's pixels to a file so a human can
+# look at the interface.
+import raven
+import raven::window
+import std::ffi::c
+import std::float64
+import std::int
+import std::io::fs
+import std::io::path
+import std::linux::fs
+import std::str
+import simcity::app
+import simcity::city
+import simcity::scenario
+import simcity::screen
+import simcity::sim
+import simcity::store
+
+with context raven::create()
+with context simcity::screen::create()
+with context simcity::store::create()
+with context std::linux::fs::create()
+
+nomethod fn frames(times: int) -> int:
+    fold i from 0 to times with intermediate drawn 0:
+        more = raven::draw_frame()
+        if more:
+            drawn + 1
+        else:
+            drawn
+
+nomethod fn shot(window: raven::Window, name: str, context fs: std::linux::fs::LinuxFS) -> str errors std::io::fs::FileError, std::io::path::NotAPath:
+    seen = raven::capture(window)
+    path = std::linux::fs::from_text(name)
+    path.write_file(seen.pixels)
+    "wrote ".concat(std::int::to_string(seen.width)).append_char('x').concat(std::int::to_string(seen.height)).append_char(' ').concat(std::int::to_string(4 * seen.width * seen.height)).append_char(' ').concat(name)
+
+# Aims at the tile (COL, ROW) of the view and delivers the move, then shows the
+# game: the loop the windowed game runs does exactly this every frame, so a
+# screenshot sees what a player sees.
+nomethod fn aim(game: simcity::app::Game, where: raven::Rect, col: int, row: int) -> simcity::app::Game errors NonFiniteFloat:
+    aim = game.window.inject_move(where.x + std::float64::from_int(col * simcity::app::TILE_PX + 8), where.y + std::float64::from_int(row * simcity::app::TILE_PX + 8)):
+        on NonFiniteFloat:
+            unit
+    moved = frames(4)
+    heard = simcity::app::take_events(game)
+    shown = simcity::app::show(heard)
+    settled = frames(4)
+    shown
+
+nomethod fn press(game: simcity::app::Game) -> simcity::app::Game:
+    down = game.window.inject_button(raven::window::R_MOUSE_LEFT, true)
+    pressed = frames(4)
+    clicked = simcity::app::take_events(game)
+    clicked
+
+nomethod fn let_go(game: simcity::app::Game) -> simcity::app::Game:
+    up = game.window.inject_button(raven::window::R_MOUSE_LEFT, false)
+    released = frames(4)
+    simcity::app::take_events(game)
+
+nomethod fn tap(game: simcity::app::Game, key: std::ffi::c::UInt) -> simcity::app::Game:
+    tapped = game.window.inject_key(key, 0)
+    tapped_frames = frames(4)
+    simcity::app::take_events(game)
+
+fn main() -> List[str] errors raven::RavenFailed, NonFiniteFloat, std::io::fs::FileError, std::io::path::NotAPath:
+    raven::start(raven::desktop())
+    town = simcity::scenario::town(7)
+    game = simcity::app::build(town)
+    laid = frames(8)
+    where = raven::rect(game.map)
+    # 1. The road tool chosen, and the pointer over a bare tile: the palette's
+    #    chosen button and the cursor's own preview.
+    roaded = simcity::app::with_tool(game, simcity::city::Tool::Road)
+    shown = simcity::app::show(roaded)
+    more = frames(8)
+    aimed = aim(shown, where, 24, 17)
+    first = shot(game.window, "/tmp/opencode/pick.png")
+    # 2. A road dragged from there, and a wire under it: the three networks,
+    #    each drawn its own way.
+    pressed = press(aimed)
+    drag = pressed.window.inject_move(where.x + std::float64::from_int(26 * simcity::app::TILE_PX + 8), where.y + std::float64::from_int(17 * simcity::app::TILE_PX + 8)):
+        on NonFiniteFloat:
+            unit
+    dragged = frames(4)
+    lined = simcity::app::take_events(pressed)
+    released = let_go(lined)
+    drawn = simcity::app::show(released)
+    settled = frames(6)
+    second = shot(game.window, "/tmp/opencode/road.png")
+    # 3. The view scrolled once, and the pointer over it: the scroll takes the
+    #    view a screen along, and the tile under the pointer is read out.
+    scrolled = tap(drawn, raven::window::R_KEY_RIGHT)
+    shown2 = simcity::app::show(scrolled)
+    scrolled_frames = frames(4)
+    aimed2 = aim(shown2, where, 6, 12)
+    third = shot(game.window, "/tmp/opencode/scroll.png")
+    # 4. A demand that fills the bars: a city with people on it, so the curves
+    #    are not all empty.
+    busy = simcity::app::with_city(scrolled, simcity::scenario::town(3))
+    ticking = fold i from 0 to 14 with intermediate s busy:
+        simcity::app::with_city(s, simcity::sim::tick(simcity::app::state(s).city))
+    busy_shown = simcity::app::show(ticking)
+    busy_frames = frames(6)
+    fourth = shot(game.window, "/tmp/opencode/demand.png")
+    # 5. A note that is neither plain nor an error: the budget.
+    budget = simcity::app::act(busy_shown, "budget")
+    budget_shown = simcity::app::show(budget)
+    budget_frames = frames(4)
+    fifth = shot(game.window, "/tmp/opencode/budget.png")
+    # 6. The inspect tool on a developed tile: the whole report on one line.
+    looked = simcity::app::with_tool(budget_shown, simcity::city::Tool::Inspect)
+    look_shown = simcity::app::show(looked)
+    look_frames = frames(6)
+    aimed3 = aim(look_shown, where, 12, 8)
+    right = aimed3.window.inject_button(raven::window::R_MOUSE_RIGHT, true)
+    clicked3 = frames(4)
+    read3 = simcity::app::take_events(aimed3)
+    shown3 = simcity::app::show(read3)
+    read_frames = frames(4)
+    sixth = shot(game.window, "/tmp/opencode/inspect.png")
+    raven::stop()
+    [first, second, third, fourth, fifth, sixth]
+
+result = main():
+    on raven::RavenFailed failure:
+        ["Raven did not start", failure.detail]
+    on NonFiniteFloat:
+        ["not a number"]
+    on std::io::fs::FileError:
+        ["could not write the shot"]
+    on std::io::path::NotAPath:
+        ["the shot's path is no path"]
+result

@@ -1,0 +1,311 @@
+# simcity::skin -- how the game looks: its theme, and the widget recipes.
+#
+# Everything in this module is about appearance and nothing else: it names the
+# theme, the accent colour and the metrics that make a control the size a
+# pointer expects, and it holds the three shapes the interface is built from
+# -- a figure (a caption over a value), a card (a surface with padding round
+# one child) and a bar.
+#
+# The C calls it makes are the generated binding's, and most of them are ones
+# the friendly `raven` module does not wrap: Rlabel_set_text_size,
+# Rlabel_set_color, Rbutton_set_style, Rborder_set_background,
+# Rprogress_bar_set_value, Rtheme_set_metric. A handle, a number and a colour
+# are ordinary arguments, so none of them needs authority of its own and this
+# module is not direct. The few that take a string -- a class name, an action
+# name -- need it as C bytes, which is what `cstr` is for: raven.bot keeps its
+# own copy of these two lines private and the package gives no public one, so
+# a program that wants a raw string has to write its own.
+#
+# A colour is written where it is used rather than named: a named Float64 is a
+# value the compiler cannot prove fits a C float, and every call that passes
+# one has to declare NonFiniteFloat. The numbers are short enough to read
+# inline, and they are the same ones simcity::render draws the map with, so a
+# comment says which.
+import std::abi::bytes
+
+import std::byte
+
+import std::float64
+
+import std::list
+
+import std::str
+
+import raven
+
+import raven::controls
+
+import raven::layout
+
+import raven::shell
+
+import raven::style
+
+import raven::widget
+
+import std::ffi::c
+
+# --- The C string the raw binding needs ------------------------------------
+#
+# A Botlish String is UTF-8 already, so a NUL on the end is all a C caller
+# that copies its argument needs (Raven copies every string it is given, as
+# its binding's `read noescape` states). The bytes are lent for the one call.
+
+nomethod fn nul() -> std::byte::Byte:
+    0
+
+nomethod fn cstr(text: str) -> std::abi::bytes::Bytes:
+    std::abi::bytes::from_list(std::str::encode_utf8(text).append(nul()))
+
+# --- The theme --------------------------------------------------------------
+#
+# Raven starts in its default theme, a neutral dark: fine for a tool and no
+# identity at all for a game. One accent colour -- the green a developed tile
+# is drawn with in this game's own palette -- and the metrics that decide
+# whether a control is comfortable to hit are all a theme needs.
+
+# One theme metric, written the way the linter wants it: the metric is the
+# receiver and the number is what it is set to.
+nomethod fn metric_set(metric: std::ffi::c::UInt, value: Float64) -> unit errors NonFiniteFloat:
+    metric.Rtheme_set_metric(value)
+    unit
+
+# The accent colour, and every shade of it that follows.
+nomethod fn accent_set(red: Float64, green: Float64, blue: Float64) -> unit errors NonFiniteFloat:
+    red.Rtheme_set_accent(green, blue)
+    unit
+
+# Applies the theme the game is drawn in, once, after raven::start.
+nomethod fn theme() -> unit errors NonFiniteFloat:
+    raven::apply_theme(raven::Theme::Dark)
+    # The accent: the green of a developed residential tile (0.21, 0.65, 0.33).
+    accent_set(0.21, 0.65, 0.33)
+    metric_set(raven::style::R_METRIC_CORNER_RADIUS, 8.0)
+    metric_set(raven::style::R_METRIC_CONTROL_HEIGHT, 28.0)
+    metric_set(raven::style::R_METRIC_PADDING_X, 12.0)
+    metric_set(raven::style::R_METRIC_PADDING_Y, 6.0)
+    metric_set(raven::style::R_METRIC_SPACING, 8.0)
+    unit
+
+# --- Labels -----------------------------------------------------------------
+#
+# A label is Raven's own text, and the theme gives every label the same size
+# and colour -- right for a button, wrong for a screen read at a glance. A
+# caption is small and dim, a figure is large and plain, and the note line is
+# in between.
+
+# A caption: small and dim, the label a figure sits under.
+nomethod fn caption(text: str) -> raven::Widget:
+    made = raven::label(text)
+    made.id.Rlabel_set_text_size(10.0)
+    made.id.Rlabel_set_color(0.58, 0.61, 0.66, 1.0)
+    made
+
+# A figure's value: large and plain, what the eye lands on.
+nomethod fn value_label(text: str) -> raven::Widget:
+    made = raven::label(text)
+    made.id.Rlabel_set_text_size(15.0)
+    made.id.Rlabel_set_color(0.93, 0.95, 0.97, 1.0)
+    made
+
+# A heading over a group of controls.
+nomethod fn heading(text: str) -> raven::Widget:
+    made = raven::label(text)
+    made.id.Rlabel_set_text_size(11.0)
+    made.id.Rlabel_set_color(0.58, 0.61, 0.66, 1.0)
+    made
+
+# The status line at the bottom of the window: one label that wraps, and
+# whose colour says what kind of thing it is reporting.
+nomethod fn note_line(text: str) -> raven::Widget:
+    made = raven::label(text)
+    made.id.Rlabel_set_text_size(11.0)
+    made.id.Rlabel_set_wrap(1)
+    made.id.Rlabel_set_color(0.93, 0.95, 0.97, 1.0)
+    made
+
+# The note line's colour. KIND is one of the three kinds below: green for what
+# worked, red for what did not, plain for everything else. The colours are
+# simcity::render's own wire-live, fire and plain inks, so the screen's
+# palette and the map's are the same one.
+NONE_NOTE = 0
+
+GOOD_NOTE = 1
+
+BAD_NOTE = 2
+
+nomethod fn note_color(note: raven::Widget, kind: int) -> unit:
+    if kind == GOOD_NOTE:
+        note.id.Rlabel_set_color(0.91, 0.77, 0.24, 1.0)
+    elif kind == BAD_NOTE:
+        note.id.Rlabel_set_color(0.79, 0.39, 0.35, 1.0)
+    else:
+        note.id.Rlabel_set_color(0.93, 0.95, 0.97, 1.0)
+    unit
+
+# A figure's value in the colour its own size calls for: a treasury below zero
+# is the one figure that changes colour, because it is the one the player has
+# to notice.
+nomethod fn figure_color(figure: raven::Widget, below_zero: bool) -> unit:
+    if below_zero:
+        figure.id.Rlabel_set_color(0.79, 0.39, 0.35, 1.0)
+    else:
+        figure.id.Rlabel_set_color(0.93, 0.95, 0.97, 1.0)
+    unit
+
+# --- A figure ---------------------------------------------------------------
+#
+# The numbers the player reads all the time -- the funds, the people, the
+# date -- are a caption over a value, so the eye finds the value and the
+# caption is only there when it is wanted.
+
+struct Figure:
+    caption: raven::Widget
+    value: raven::Widget
+
+nomethod fn figure(name: str, value: str) -> Figure:
+    Figure {caption: caption(name), value: value_label(value)}
+
+nomethod fn show_figure(shown: Figure, value: str) -> unit:
+    shown.value.set_text(value)
+    unit
+
+# --- A card ----------------------------------------------------------------
+#
+# A card is a surface with padding round one child. Raven's Border draws the
+# background, the rounded corners and a hairline outline, so a group of
+# controls reads as one thing rather than as a scatter of them.
+
+nomethod fn card(child: raven::Widget) -> raven::Widget:
+    made = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_BORDER)}
+    made.add(child)
+    made.id.Rborder_set_padding(12.0, 7.0, 12.0, 7.0)
+    made.id.Rborder_set_corner_radius(12.0, 12.0, 12.0, 12.0)
+    made.id.Rborder_set_background(0.16, 0.17, 0.20, 1.0)
+    made.id.Rborder_set_outline(1.0, 1.0, 1.0, 1.0, 0.07)
+    made.id.Rborder_set_shadow(24.0, 0.0, 8.0)
+    made
+
+# --- Buttons ----------------------------------------------------------------
+#
+# A button fires the named action, and Rbutton_set_style is what makes the
+# chosen tool visibly the chosen one: a primary button wears the accent.
+
+# A button that fires the named action, with the tooltip TIP over it.
+nomethod fn action(text: str, name: str, tip: str) -> raven::Widget:
+    made = raven::button(text)
+    made.set_action(name)
+    made.set_tooltip(tip)
+    made
+
+# WHETHER this button is the one the player has chosen.
+nomethod fn picked(button: raven::Widget, chosen: bool) -> unit:
+    if chosen:
+        button.id.Rbutton_set_style(raven::controls::R_BUTTON_PRIMARY)
+    else:
+        button.id.Rbutton_set_style(raven::controls::R_BUTTON_DEFAULT)
+    unit
+
+# A button that holds a glyph rather than a word, and is wider than its glyph.
+nomethod fn glyph(text: str, name: str, tip: str) -> raven::Widget:
+    made = action(text, name, tip)
+    made.id.Rwidget_set_min_size(38.0, 0.0)
+    made
+
+# --- A bar ----------------------------------------------------------------
+#
+# The demand curves are the pair of numbers the player watches rather than
+# reads, so they are bars: Raven's progress bar draws one and its value is a
+# fraction.
+
+# --- An island -------------------------------------------------------------
+#
+# An island is a pill at the top of a window that unfolds under the pointer,
+# on a click, or from code: Raven's own place for "what is going on". Its
+# first child is what it always says and its second is what it says when it
+# opens, so a game's transient news -- saved, loaded, not enough funds -- is
+# both announced and kept.
+
+# One island: the window it belongs to, the name it always shows, and the
+# sentence it opens on.
+struct Say:
+    island: raven::Widget
+    name: raven::Widget
+    opened: raven::Widget
+
+nomethod fn say(window: raven::Window, name: str, opened: str) -> Say:
+    island = raven::Widget {id: raven::shell::Risland_create()}
+    shown = caption(name)
+    opened_label = note_line(opened)
+    island.add(shown)
+    island.add(opened_label)
+    island.id.Risland_set_attached(1)
+    island.id.Risland_set_expand_on_hover(0)
+    window.id.Rwindow_set_island(island.id)
+    Say {island: island, name: shown, opened: opened_label}
+
+# Says TEXT, and folds back after a couple of seconds: the pill is dark
+# whatever the theme, so it reads over anything the window has drawn.
+nomethod fn announce(said: Say, text: str) -> unit:
+    said.opened.set_text(text)
+    said.island.id.Risland_expand_for(2.5)
+    unit
+
+# A bar: the shape itself.
+
+struct Bar:
+    caption: raven::Widget
+    fill: raven::Widget
+
+nomethod fn bar(name: str) -> Bar:
+    made = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_PROGRESSBAR)}
+    made.id.Rwidget_set_min_size(96.0, 14.0)
+    made.id.Rslot_set_fill(1.0)
+    Bar {caption: caption(name), fill: made}
+
+# A fraction clamped to what a bar can show.
+nomethod fn clamp_one(value: Float64) -> Float64:
+    if value < 0.0:
+        0.0
+    elif value > 1.0:
+        1.0
+    else:
+        value
+
+# Fills the bar with SIZE out of MOST. The two divisions are handled here
+# rather than declared: a figure that is not a number is a bar that stays
+# empty, which is what the eye should see, and no caller of a figure should
+# have to carry Raven's float range with it.
+nomethod fn show_bar(shown: Bar, size: int, most: int) -> unit:
+    have = std::float64::from_int(size):
+        on NonFiniteFloat:
+            0.0
+    want = std::float64::from_int(most):
+        on NonFiniteFloat:
+            1.0
+    fraction = have / want:
+        on NonFiniteFloat:
+            0.0
+    shown.fill.id.Rprogress_bar_set_value(clamp_one(fraction)):
+        on NonFiniteFloat:
+            unit
+    unit
+
+# --- Rules ------------------------------------------------------------------
+#
+# A hairline between two things that are not the same thing: the figures in
+# the header, the palette beside the map. It is a separator rather than a gap
+# because a gap is invisible on a dark card and a line is not.
+
+nomethod fn rule() -> raven::Widget:
+    made = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_SEPARATOR)}
+    made.id.Rseparator_set_orientation(raven::widget::R_HORIZONTAL)
+    made
+
+# A vertical rule: Raven draws a separator along its slot, and in a row that is
+# a line between two neighbours.
+nomethod fn vrul() -> raven::Widget:
+    made = raven::Widget {id: raven::widget::Rwidget_create(raven::widget::R_WIDGET_SEPARATOR)}
+    made.id.Rseparator_set_orientation(raven::widget::R_VERTICAL)
+    made.id.Rwidget_set_size(1.0, 0.0)
+    made
